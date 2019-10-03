@@ -5,11 +5,6 @@ date: "September 23, 2019"
 output: html_document
 ---
 
-Next to-dos:
-- See line 122
-- Withhold any additional plots based on proximity to nearest neighbor
-
-
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
@@ -123,6 +118,9 @@ AIM_filtered <- AIM_dist %>%
 
 # Remove unneeded object
 remove(AIM_dist)
+
+#Question, what is the spatial distribution of the validation set
+mapview(AIM_validate)
 ```
 
 #### Filter remaining plots within 100 meters of each other and keep the most recent DateTime
@@ -143,10 +141,31 @@ nrow(AIM_near)
 min(AIM_filtered$nnInt)
 remove(AIM_near)
 
-# The remaining AIM plots will be used for modelling
+# The remaining AIM plots will be used for modeling
 AIM_model <- AIM_filtered %>%
   select(-nn, -nnInt)
 remove(AIM_filtered)
+
+# We want to set aside a total of 30% of the data for the validation set. So we need to check that.
+set.seed(10)
+n_validate = nrow(AIM_validate)
+plots_needed = (.3 * nrow(AIMmerge)) - n_validate
+
+AIM_validate_more = AIM_model %>%
+  sample_n(size = plots_needed, replace = FALSE)
+  
+# Rbind AIM_validate_more to AIM_validate
+AIM_validate <- rbind(AIM_validate,AIM_validate_more)
+
+# Drop rows of AIM_model that match AIM_validate_more
+AIM_model <- AIM_model %>%
+  mutate(drop = AIM_model$PrimaryKey %in% AIM_validate_more$PrimaryKey) %>%
+  filter(drop == FALSE) %>%
+  select(-drop)
+
+# Test the proportion of the validation set to the original dataframe
+print(nrow(AIM_validate) / nrow(AIMmerge))
+print(nrow(AIM_model) / nrow(AIMmerge))
 ```
 
 #### Create 100 meter buffer of AIM_model plots
@@ -158,10 +177,10 @@ AIM_model_buff_100m = st_buffer(AIM_model,dist = 100)
 #### Export AIM_model, AIM_model_buff_100m, and AIM_validate as shapefiles
 ```{r}
 # Export AIM_model point data
-st_write(AIM_model, dsn = 'data/AIM_model.shp', driver = 'ESRI Shapefile')
+st_write(AIM_model, dsn = 'data/AIM_model.shp', driver = 'ESRI Shapefile', delete_dsn = TRUE)
 # Export AIM_model_buff_100m polygons
-st_write(AIM_model_buff_100m, dsn = 'data/AIM_modelbuff_100m.shp', driver = 'ESRI Shapefile')
+st_write(AIM_model_buff_100m, dsn = 'data/AIM_modelbuff_100m.shp', driver = 'ESRI Shapefile', delete_dsn = TRUE)
 # Export AIM_validate point data
-st_write(AIM_validate, dsn = 'data/AIM_validate.shp', driver = 'ESRI Shapefile')
+st_write(AIM_validate, dsn = 'data/AIM_validate.shp', driver = 'ESRI Shapefile', delete_dsn = TRUE)
 ```
 
