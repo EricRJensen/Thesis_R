@@ -1,0 +1,167 @@
+---
+title: "WitholdMergeAIM"
+author: "Eric Jensen"
+date: "September 23, 2019"
+output: html_document
+---
+
+Next to-dos:
+- See line 122
+- Withhold any additional plots based on proximity to nearest neighbor
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(sf)
+library(mapview)
+library(lubridate)
+library(nngeo) # nearest neighbors and other dependencies
+```
+
+#Loading, Merging, and Withholding datapoints for upload to GEE
+### Summary
+In these scripts I will be merging my field collected data from 2019 with the AIM dataset for years 2011-2017 to streamline analysis. Once I have completed the merging, I will withhold datapoints for an independent validation set based on two criteria, 1) all datapoints that were revisited one or more times within the AIM dataset and 2) for any points that are within 100 meters of another point, I will keep the most recent of those points.
+
+#### Import and clip spatial data to project boundary
+
+```{r}
+# Import shapefiles
+AIMfull <- read_sf('data/Shapefiles/AIM_tblPlots.shp') %>%
+  st_transform(crs = 2163)
+GBbounds <- read_sf('data/Shapefiles/ProjectBounds.shp') %>%
+  st_transform(crs = 2163)
+Field <- read_sf('data/Shapefiles/FieldPlots_tbl.shp') %>%
+  st_transform(crs = 2163) %>%
+  mutate(PrimaryKey = PlotKey)
+
+# Subset AIM plots to project boundary (Omernik ecoregion boundaries for Great Basin)
+AIMgb <- AIMfull[GBbounds,]
+
+#Check spatial extent
+# mapview(GBbounds, add=T) +
+#    mapview(AIMgb, color = 'blue') + 
+#    mapview(Field, color = 'red')
+```
+
+#### Next merge the field data and the full AIM dataset. 
+There are discrepancies in the fields that need to be investigated before I can make a clean merge
+
+```{r}
+# View the tibbles to ensure that data attributes are the same or similar
+# Names(AIMgb)
+# Names(Field)
+# The two tables have mostly the same fields, with four total differences.
+
+# Merge the field data from 2019 with AIM dataset
+# Drop discrepancies in columns. Add column for DataOrigin to distinguish my field data from the AIM dataset
+common_AIM = AIMgb[, intersect(colnames(Field), colnames(AIMgb))] %>%
+  mutate(DataOrigin = 'AIMdataset')
+common_Field = Field[, intersect(colnames(AIMgb), colnames(Field))] %>%
+  mutate(DataOrigin = 'Eric')
+# rbind sf objects together
+AIMmerge <- rbind(common_AIM,common_Field)
+
+# Remove unneeded objects
+remove(common_Field)
+remove(common_AIM)
+# Map the data
+#mapview(AIMmerge, zcol = 'DataOrigin')
+```
+
+#### Assess proximity of points to each other
+
+```{r}
+## View the geometry fields for the plots
+# AIMsubset <- AIMmerge %>%
+#   select(PlotID,DateModifi,geometry, Longitude, Latitude) %>%
+#   slice(1:100)
+
+# find the second shortest euclidean distance between each point (reported back in meters)
+plots_nn <- st_nn(AIMmerge,AIMmerge,sparse=FALSE,k=2,returnDist=T)
+AIM_dist <- mutate(AIMmerge,nn = plots_nn$dist[,2]) 
+
+# # View the output of the merge
+# AIM_dist %>%
+#   select(PlotID,DateModifi,geometry, Longitude, Latitude, nn, PrimaryKey) %>%
+#   View()
+# AIM_dist %>%
+#   mapview(zcol = 'nn')
+
+# Remove unneeded object
+remove(plots_nn)
+```
+
+#### Filter all points that overlap with another point exactly or have the same PlotID as another to a new object called "AIM_validate"
+
+```{r}
+# Add nearest neighbor as integer column to make values easier to interpret in AIM_dist object
+AIM_dist <- AIM_dist %>%
+  mutate(nnInt = as.integer(nn))
+
+# Filter all plots with a distance of 0 to nearest neighbor to independent validation object
+# AIM_validate <- AIM_dist %>%
+#   filter(nn == 0) %>%
+#   group_by(PlotID)%>%
+#   mutate(nameCount=n())
+# View(AIM_validate)
+
+# Some plots have the same PlotID but different locations, so I want to grab those too.
+# Find plots with the same name as another plot and create a column with the n() of each plot name. 
+# Then filter all plots with an n()>1 AND within 100 meters of another plot
+AIM_validate <- AIM_dist %>%
+  mutate(nameCount=n()) %>%
+  filter(nameCount>1 & nnInt <=100) %>%
+  select(-nn, -nnInt, -nameCount)
+
+# Filter out all of the independent validation plots from the AIM_dist dataframe and nearest neighbor and count columns
+AIM_filtered <- AIM_dist %>%
+  mutate(nameCount=n()) %>% 
+  filter(nameCount <= 1 | nameCount == 0 | nnInt >100) %>% 
+  select(-nn, -nnInt, -nameCount)
+
+# Remove unneeded object
+remove(AIM_dist)
+```
+
+#### Filter remaining plots within 100 meters of each other and keep the most recent DateTime
+```{r}
+# Recalculate nearest neighbor distance for remaining AIM plots
+plots_nn <- st_nn(AIM_filtered, AIM_filtered, sparse=FALSE,k=2,returnDist=T)
+AIM_filtered <- mutate(AIM_filtered,nn = plots_nn$dist[,2])
+remove(plots_nn)
+
+# Add nearest neighbor as integer column to make values easier to interpret in AIM_dist object
+AIM_filtered <- AIM_filtered %>%
+  mutate(nnInt = as.integer(nn))
+
+# How many plots are there within 100 meters of another plot?
+AIM_near <- AIM_filtered %>% 
+  filter(nnInt<=100) 
+nrow(AIM_near)
+min(AIM_filtered$nnInt)
+remove(AIM_near)
+
+# The remaining AIM plots will be used for modelling
+AIM_model <- AIM_filtered %>%
+  select(-nn, -nnInt)
+remove(AIM_filtered)
+```
+
+#### Create 100 meter buffer of AIM_model plots
+```{r}
+AIM_model_buff_100m = st_buffer(AIM_model,dist = 100)
+#mapview(AIM_model_buff_100m)
+```
+
+#### Export AIM_model, AIM_model_buff_100m, and AIM_validate as shapefiles
+```{r}
+# Export AIM_model point data
+st_write(AIM_model, dsn = 'data/AIM_model.shp', driver = 'ESRI Shapefile')
+# Export AIM_model_buff_100m polygons
+st_write(AIM_model_buff_100m, dsn = 'data/AIM_modelbuff_100m.shp', driver = 'ESRI Shapefile')
+# Export AIM_validate point data
+st_write(AIM_validate, dsn = 'data/AIM_validate.shp', driver = 'ESRI Shapefile')
+```
+

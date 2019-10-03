@@ -1,0 +1,29 @@
+---
+title: "earthEngineGrabR"
+author: "Eric Jensen"
+date: "September 27, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(earthEngineGrabR)
+```
+
+```{r}
+# Great Basin boundary target area
+GBbounds <- read_sf('data/Shapefiles/ProjectBounds.shp') %>%
+  st_transform(crs = 2163)
+
+# Most likely the best way to export will be to batch export image collections to drive using the fittoprecipe batch script and then to use the googledrive R package to download the files to the project data folder. However, ask Matt Ross if he has any protips for grabbing imagecollections directly from GEE using the earthEngingGrabR package
+
+ee_test <- ee_grab(data = ee.ImageCollection(dataset-id,
+                                             spatialReducer = "mean", 
+                                              resolution = 30, 
+                                          bandSelection = c("elevation"
+                                          ),
+                    targetArea = system.file("data/territories.shp", package = "earthEngineGrabR"))
+```
+
+
