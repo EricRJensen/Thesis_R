@@ -22,14 +22,14 @@ In these scripts I will be merging my field collected data from 2019 with the AI
 #### Import and clip spatial data to project boundary
 
 ```{r}
-# Import shapefiles
+# Import shapefiles and tables
 AIMfull <- read_sf('data/Shapefiles/AIM_tblPlots.shp') %>%
-  st_transform(crs = 2163)
-GBbounds <- read_sf('data/Shapefiles/ProjectBounds.shp') %>%
   st_transform(crs = 2163)
 Field <- read_sf('data/Shapefiles/FieldPlots_tbl.shp') %>%
   st_transform(crs = 2163) %>%
   mutate(PrimaryKey = PlotKey)
+GBbounds <- read_sf('data/Shapefiles/ProjectBounds.shp') %>%
+  st_transform(crs = 2163)
 
 # Subset AIM plots to project boundary (Omernik ecoregion boundaries for Great Basin)
 AIMgb <- AIMfull[GBbounds,]
@@ -38,6 +38,8 @@ AIMgb <- AIMfull[GBbounds,]
 # mapview(GBbounds, add=T) +
 #    mapview(AIMgb, color = 'blue') + 
 #    mapview(Field, color = 'red')
+
+remove(AIMdates)
 ```
 
 #### Next merge the field data and the full AIM dataset. 
@@ -120,7 +122,7 @@ AIM_filtered <- AIM_dist %>%
 remove(AIM_dist)
 
 #Question, what is the spatial distribution of the validation set
-mapview(AIM_validate)
+#mapview(AIM_validate)
 ```
 
 #### Filter remaining plots within 100 meters of each other and keep the most recent DateTime
@@ -145,11 +147,15 @@ remove(AIM_near)
 AIM_model <- AIM_filtered %>%
   select(-nn, -nnInt)
 remove(AIM_filtered)
+```
 
-# We want to set aside a total of 30% of the data for the validation set. So we need to check that.
+#### Set aside 30 percent of the plots total for independent validation
+```{r}
+# We want to set aside some percentage of the data for the validation set. So we need to check that.
 set.seed(10)
+pct_withhold = .3
 n_validate = nrow(AIM_validate)
-plots_needed = (.3 * nrow(AIMmerge)) - n_validate
+plots_needed = (pct_withhold * nrow(AIMmerge)) - n_validate
 
 AIM_validate_more = AIM_model %>%
   sample_n(size = plots_needed, replace = FALSE)
@@ -160,8 +166,27 @@ AIM_validate <- rbind(AIM_validate,AIM_validate_more)
 # Drop rows of AIM_model that match AIM_validate_more
 AIM_model <- AIM_model %>%
   mutate(drop = AIM_model$PrimaryKey %in% AIM_validate_more$PrimaryKey) %>%
-  filter(drop == FALSE) %>%
-  select(-drop)
+  filter(drop == FALSE) 
+```
+
+#### Prepare data fields for export to shapefile for GEE
+```{r}
+# Join full AIM dataset with DateVisited since they are not in the original table
+AIMdates <- read_csv('data/CSVs/visitdate.csv') %>%
+  select(-FID) 
+AIMdates <- AIMdates %>%
+  mutate(DateVisite = mdy_hms(DateVisite)) %>%
+  mutate(Year = year(DateVisite))
+
+AIM_model <- AIM_model %>%
+  inner_join( AIMdates, by = 'PrimaryKey') 
+AIM_model <- AIM_model %>%
+  select(PlotKey, PlotID, VisitDate = DateVisite, VisitYear = Year, PrimaryKey, SpeciesLis)
+  
+
+# Create year column and keep the datetime
+AIM_model <- AIM_model %>%
+  
 
 # Test the proportion of the validation set to the original dataframe
 print(nrow(AIM_validate) / nrow(AIMmerge))
@@ -170,7 +195,10 @@ print(nrow(AIM_model) / nrow(AIMmerge))
 
 #### Create 100 meter buffer of AIM_model plots
 ```{r}
-AIM_model_buff_100m = st_buffer(AIM_model,dist = 100)
+AIM_model_buff_100m = AIM_model %>%
+  st_buffer(dist = 100) %>%
+  st_transform(crs = 4326)
+View(AIM_model_buff_100m)
 #mapview(AIM_model_buff_100m)
 ```
 

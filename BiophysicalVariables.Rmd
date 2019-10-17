@@ -9,6 +9,8 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 
 library(earthEngineGrabR)
+library(raster)
+library(spatialEco)
 library(sf)
 ```
 
@@ -19,7 +21,10 @@ GBbounds <- read_sf('data/Shapefiles/ProjectBounds.shp') %>%
 
 # Most likely the best way to export will be to batch export image collections to drive using the fittoprecipe batch script and then to use the googledrive R package to download the files to the project data folder. However, ask Matt Ross if he has any protips for grabbing imagecollections directly from GEE using the earthEngingGrabR package
 
-ee_test <- ee_grab(data = ee_data_collection(datasetID = "USGS/NED", spatialReducer = "mean", bandSelection = "elevation"), targetArea = system.file("data/Shapefiles/ProjectBounds.shp", package = "earthEngineGrabR"))
+ee_test <- ee_grab(data = ee_data_image(datasetID = 'USGS/NED',
+                                               resolution = 10 
+                                               ),
+                    targetArea = system.file("data/Shapefiles/ProjectBounds.shp", package = "earthEngineGrabR"))
 ```
 
 
