@@ -212,3 +212,35 @@ st_write(AIM_model_buff_100m, dsn = 'data/AIM_modelbuff_100m.shp', driver = 'ESR
 st_write(AIM_validate, dsn = 'data/AIM_validate.shp', driver = 'ESRI Shapefile', delete_dsn = TRUE)
 ```
 
+#### Review outputs without running entire script
+```{r}
+AIM_model_buff_import <- st_read('data/AIM_modelbuff_100m.shp')
+View(AIM_model_buff_import)
+
+# Search for missing values in visit date
+AIM_model_buff_import %>%
+  summarise(n = n_distinct(VisitYear))
+
+AIM_model_buff_import %>%
+  as_tibble() %>%
+  mutate(geometry = NULL) %>%
+  select(VisitYear) %>%
+  distinct(VisitYear)
+
+AIM_model_buff_import %>%
+  mutate(VisitVal = is.na(AIM_model_buff_import$VisitDate)) %>%
+  filter(VisitVal == TRUE) %>%
+  View()
+
+### One plot should be removed because missing year—Do this later though
+
+# Search for missing data in species list
+AIM_model_buff_import %>%
+  mutate(SpeciesVal = is.na(AIM_model_buff_import$SpeciesLis)) %>%
+  filter(SpeciesVal == TRUE) %>%
+  View()
+
+# 16 plots without species level data
+```
+
+

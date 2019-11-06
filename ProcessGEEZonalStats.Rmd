@@ -1,0 +1,205 @@
+---
+title: "ProcessGEEZonalStats"
+author: "Eric Jensen"
+date: "October 28, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(sf)
+library(raster)
+library(mapview)
+library(reshape2)
+library(SparkR)
+```
+
+### Import zonal statistics CSVs and process to prepare for join
+```{r}
+# list the csv files for each zonal statistic
+ndvi_mean_zonal <- list.files(path = "data/zonalCSVs", pattern = "meanNDVI", full.names = T)
+ndvi_std_zonal <- list.files(path = "data/zonalCSVs", pattern = "stdNDVI", full.names = T)
+nbr_mean_zonal <- list.files(path = "data/zonalCSVs", pattern = "meanNBR", full.names = T)
+nbr_std_zonal <- list.files(path = "data/zonalCSVs", pattern = "stdNBR", full.names = T)
+tcb_mean_zonal <- list.files(path = "data/zonalCSVs", pattern = "meanTCB", full.names = T)
+tcb_std_zonal <- list.files(path = "data/zonalCSVs", pattern = "stdTCB", full.names = T)
+tcg_mean_zonal <- list.files(path = "data/zonalCSVs", pattern = "meanTCG", full.names = T)
+tcg_std_zonal <- list.files(path = "data/zonalCSVs", pattern = "stdTCG", full.names = T)
+tcw_mean_zonal <- list.files(path = "data/zonalCSVs", pattern = "meanTCW", full.names = T)
+tcw_std_zonal <- list.files(path = "data/zonalCSVs", pattern = "stdTCW", full.names = T)
+listofLists = list(ndvi_mean_zonal,ndvi_std_zonal,nbr_mean_zonal,nbr_std_zonal,tcb_mean_zonal,
+                   tcb_std_zonal,tcg_mean_zonal,tcg_std_zonal,tcw_mean_zonal,tcw_std_zonal)
+
+# create empty lists for each statistic
+ndvi_mean <- list()
+ndvi_std <- list()
+nbr_mean <- list()
+nbr_std <- list()
+tcb_mean <- list()
+tcb_std <- list()
+tcg_mean <- list()
+tcg_std <- list()
+tcw_mean <- list()
+tcw_std <- list()
+
+# functions to read the CSVs into the list
+ndvi_mean <- map(ndvi_mean_zonal,read_csv)
+ndvi_std <- map(ndvi_std_zonal,read_csv)
+nbr_mean <- map(nbr_mean_zonal,read_csv)
+nbr_std <- map(nbr_std_zonal,read_csv)
+tcb_mean <- map(tcb_mean_zonal,read_csv)
+tcb_std <- map(tcb_std_zonal,read_csv)
+tcg_mean <- map(tcg_mean_zonal,read_csv)
+tcg_std <- map(tcg_std_zonal,read_csv)
+tcw_mean <- map(tcw_mean_zonal,read_csv)
+tcw_std <- map(tcw_std_zonal,read_csv)
+remove(listofLists,ndvi_mean_zonal,ndvi_std_zonal,nbr_mean_zonal,nbr_std_zonal,tcb_mean_zonal,
+                   tcb_std_zonal,tcg_mean_zonal,tcg_std_zonal,tcw_mean_zonal,tcw_std_zonal)
+
+#bind cols to produce dataframes of each zonal statistic, rename cols with unique name
+ndvi_mean <- ndvi_mean %>% bind_rows() %>% dplyr::select(PrimaryKey, ndvi_mean = mean)
+ndvi_std <- ndvi_std %>% bind_rows() %>% dplyr::select(PrimaryKey, ndvi_stdDev = stdDev)
+nbr_mean <- nbr_mean %>% bind_rows() %>% dplyr::select(PrimaryKey, nbr_mean = mean)
+nbr_std <- nbr_std %>% bind_rows() %>% dplyr::select(PrimaryKey, nbr_stdDev = stdDev)
+tcb_mean <- tcb_mean %>% bind_rows() %>% dplyr::select(PrimaryKey, tcb_mean = mean)
+tcb_std <- tcb_std %>% bind_rows() %>% dplyr::select(PrimaryKey, tcb_stdDev = stdDev)
+tcg_mean <- tcg_mean %>% bind_rows() %>% dplyr::select(PrimaryKey, tcg_mean = mean)
+tcg_std <- tcg_std %>% bind_rows() %>% dplyr::select(PrimaryKey, tcg_stdDev = stdDev)
+tcw_mean <- tcw_mean %>% bind_rows() %>% dplyr::select(PrimaryKey, tcw_mean = mean)
+tcw_std <- tcw_std %>% bind_rows() %>% dplyr::select(PrimaryKey, tcw_stdDev = stdDev)
+
+# Assessed all dataframes for missing predictor variable values, none present
+```
+
+# Import spatial plots and join with GEE zonal stats
+```{r}
+# Import plots sf for joining GEE zonal stats too
+AIM_plots <- read_sf('data/AIM_model.shp') %>%
+  st_transform(crs = 4326)
+AIMdf <- as_tibble(matrix(unlist(AIM_plots), nrow=nrow(AIM_plots), byrow=F))
+AIM_plotsDF <- dplyr::rename(AIMdf, "plotkey" = V1, "PlotID" = V2, "VisitDate" = V3, "VisitYear" = V4, "PrimaryKey" = V5, "SpeciesLis" = V6, "geometry" = V7)
+View(AIMdf)
+View(AIM_plots)
+
+listofGEE = list(AIM_plots,ndvi_mean,ndvi_std,nbr_mean,nbr_std,tcb_mean,tcb_std,tcg_mean,tcg_std,tcw_mean,tcw_std)
+# Join the zonal statistics to each plot, remove plots with NAs--likely only the dateless plot
+AIM_wGEE <- reduce(listofGEE, left_join)
+remove(ndvi_mean,ndvi_std,nbr_mean,nbr_std,tcb_mean,tcb_std,tcg_mean,tcg_std,tcw_mean,tcw_std, listofGEE)
+```
+
+### Calculate zonal statistics for rasters of elevation, slope, aspect, etc.
+```{r}
+# import physical rasters
+GBdem<- raster('data/Tiffs/GBdem_new.tif')
+GBslope<- raster('data/Tiffs/GBslope.tif')
+GBaspect<- raster('data/Tiffs/GBaspect.tif')
+GBtpi<- raster('data/Tiffs/GBtpi.tif')
+
+# extract raster values and mutate new column to prediction layers
+AIM_wGEE_wPhys <- AIM_wGEE %>%
+  mutate(elev = extract(x=GBdem, y=AIM_wGEE)) %>%
+  mutate(aspect = extract(x=GBaspect, y=AIM_wGEE)) %>%
+  mutate(slope = extract(x=GBslope, y=AIM_wGEE)) %>%
+  mutate(tpi = extract(x=GBtpi, y=AIM_wGEE))
+remove(GBdem,GBslope,GBaspect,GBtpi)
+```
+
+### Calculate species richness values based on list
+```{r}
+# Parse the species list strings to lists
+AIM_wGEE_wPhys_wSR <- AIM_wGEE_wPhys %>%
+  mutate(SpecList = str_split(SpeciesLis,pattern=";")) %>%
+  dplyr::select(-SpeciesLis)
+
+# Calculate number of species at each plot (-1 because of extra "") and bind the dataframe to predictive dataframe
+SpecN = list()
+for (i in 1:nrow(AIM_wGEE_wPhys)) {
+          SpecN[i] <- length(AIM_wGEE_wPhys_wSR$SpecList[[i]]) - 1}
+SpecNdf <- data.frame(matrix(unlist(SpecN), nrow=length(SpecN), byrow=T))
+AIM_wGEE_wPhys_wSR <- bind_cols(AIM_wGEE_wPhys_wSR,SpecNdf)
+
+AIM_PhysRS <- AIM_wGEE_wPhys_wSR
+remove(AIM_wGEE,AIM_wGEE_wPhys,AIM_wGEE_wPhys_wSR)
+
+# Write existing table to CSV
+AIM_df <- data.frame(matrix(unlist(AIM_PhysRS), nrow=length(AIM_PhysRS), byrow=T))
+write_csv(AIMcovariates, path = "data/CSVs/AIMcovariates.csv")
+
+AIMcovariates$VisitYear
+# Read in USDA plants dataframe to get genus and species data
+# plantsList <- read_csv('data/TXT/USDA_PlantsTable.txt')
+```
+
+### Assess climate covariate data (36 deg - 45 deg; 112 deg - 122 deg)
+#### Climate variables of interest are:
+- ADI (annual dryness index)
+- SDI (summer dryness index)
+- FFP (frost free period)
+- GSP (growing season precipitation)
+- MAP (mean annual precipitation)
+- SPRP (spring precipitation)
+- SMRP (summer precipitation)
+```{r}
+# import CSV from previous lines
+
+# Import mosaics of desired variables
+cliIndexList <- c("_adi.tif", "_sdi.tif", "_sprp.tif", "_smrp.tif", "_ffp.tif", "_gsp.tif", "_map.tif")
+cliFolderList <- list()
+cliFolderList <- grep(list.files(path = 'D:/current_climates', full.names = T), pattern = "33|34|35|111|123|124", invert = T, value = T)
+
+# only create the list once--otherwise it will overwrite
+cliList <- list() 
+cliMosaic <- list()
+
+# vary the index from 1:the number of indices
+index = 2
+cliIndexList[[index]]
+cliList[[index]] <- list()
+# cliList[[index]]$index <- str_replace(cliIndexList[[index]], ".tif", "")
+# cliList[[index]]$index <- str_replace(cliList[[index]]$index, "_", "")
+
+for(i in seq_along(cliFolderList)){ 
+    cliList[[index]][[i]] <- raster(grep(list.files(path = cliFolderList[[i]], full.names = T), 
+                            pattern = cliIndexList[[index]], value = T))}
+cliList[[index]]$fun <- mean
+
+cliMosaic[[index]] <- do.call(mosaic,cliList[[index]])
+names(cliMosaic[[index]]) <- cliIndexList[[index]] %>% str_replace(".tif", "") %>% str_replace("_", "")
+
+cliMosaic
+
+
+# cliMosaicList <- list()
+# cliMosaicList$fun <- mean
+# rasterList <- list()
+# rasterList$fun <- mean
+# 
+# for(i in seq_along(cliIndexList)){
+#   for(j in 1:2){ #seq_along(cliFolderList)
+#     rasterList[[j]] <- raster(grep(list.files(path = cliFolderList[[j]],full.names = T), 
+#                             pattern = cliIndexList[[i]], value = T))
+#     rasterList$fun <- mean
+#     cliMosaicList[[j]] <- do.call(mosaic, rasterList)
+#     cliMosaicList$fun <- mean
+#     }
+#   }
+```
+
+### Assess soils data
+```{r}
+
+```
+
+### Review biophysical data
+```{r}
+
+```
+
+
+
+
+
+
+

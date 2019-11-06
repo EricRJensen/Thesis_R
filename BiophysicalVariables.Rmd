@@ -1,5 +1,5 @@
 ---
-title: "earthEngineGrabR"
+title: "BiophysicalVariables"
 author: "Eric Jensen"
 date: "September 27, 2019"
 output: html_document
@@ -8,10 +8,27 @@ output: html_document
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 
-library(earthEngineGrabR)
 library(raster)
 library(spatialEco)
 library(sf)
+library(mapview)
+library(plyr)
+library(tidyverse)
+library(filesstrings)
+
+```
+
+```{r}
+# # Great Basin boundary target area
+# GBbounds <- read_sf('data/Shapefiles/ProjectBounds.shp') %>%
+#   st_transform(crs = 2163)
+# 
+# # Most likely the best way to export will be to batch export image collections to drive using the fittoprecipe batch script and then to use the googledrive R package to download the files to the project data folder. However, ask Matt Ross if he has any protips for grabbing imagecollections directly from GEE using the earthEngingGrabR package
+# 
+# ee_test <- ee_grab(data = ee_data_image(datasetID = 'USGS/NED',
+#                                                resolution = 10 
+#                                                ),
+#                     targetArea = system.file("data/Shapefiles/ProjectBounds.shp", package = "earthEngineGrabR"))
 ```
 
 ```{r}
@@ -19,12 +36,31 @@ library(sf)
 GBbounds <- read_sf('data/Shapefiles/ProjectBounds.shp') %>%
   st_transform(crs = 2163)
 
-# Most likely the best way to export will be to batch export image collections to drive using the fittoprecipe batch script and then to use the googledrive R package to download the files to the project data folder. However, ask Matt Ross if he has any protips for grabbing imagecollections directly from GEE using the earthEngingGrabR package
+# Extract zipped files to mosaic
+# zipList = list.files(path = 'data/Tiffs', pattern = '*.zip', full.names = TRUE)
+# ldply(.data = zipList, .fun = unzip, exdir = 'data/Tiffs/unzip')
 
-ee_test <- ee_grab(data = ee_data_image(datasetID = 'USGS/NED',
-                                               resolution = 10 
-                                               ),
-                    targetArea = system.file("data/Shapefiles/ProjectBounds.shp", package = "earthEngineGrabR"))
+GBdem<- raster('data/Tiffs/GBdem_new.tif')
+plot(GBdem)
 ```
+
+```{r}
+#GBslope <- terrain(GBdem, opt = 'slope', unit = 'degrees')
+writeRaster(GBslope, filename = 'data/Tiffs/GBslope.tif', format = "GTiff")
+
+#GBaspect <- terrain(GBdem, opt = 'aspect', unit = 'degrees')
+writeRaster(GBaspect, filename = 'data/Tiffs/GBaspect.tif', format = "GTiff")
+
+#GBtpi <- terrain(GBdem, opt = 'tpi', unit = 'degrees')
+writeRaster(GBtpi, filename = 'data/Tiffs/GBtpi.tif', format = "GTiff")
+```
+
+### Climate data of interest
+Spring precip (sprp)
+Summer precip (smrp)
+Annual dryness index (adi)
+Summer dryness index (sdi)
+Ratio of summer precip to total precip (pratio)
+Growing season precipe (gsp)
 
 
