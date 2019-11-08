@@ -78,19 +78,44 @@ tcw_std <- tcw_std %>% bind_rows() %>% dplyr::select(PrimaryKey, tcw_stdDev = st
 # Import plots sf for joining GEE zonal stats too
 AIM_plots <- read_sf('data/AIM_model.shp') %>%
   st_transform(crs = 4326)
-AIMdf <- as_tibble(matrix(unlist(AIM_plots), nrow=nrow(AIM_plots), byrow=F))
-AIM_plotsDF <- dplyr::rename(AIMdf, "plotkey" = V1, "PlotID" = V2, "VisitDate" = V3, "VisitYear" = V4, "PrimaryKey" = V5, "SpeciesLis" = V6, "geometry" = V7)
-View(AIMdf)
-View(AIM_plots)
+# Convert to tibble without geometry for manipulating and joining
+AIMdf <- as_data_frame(matrix(unlist(AIM_plots), nrow=nrow(AIM_plots), byrow=F))
+AIM_plotsDF <- AIMdf %>%
+  dplyr::select(-V3, -V7, -V8) %>%
+  dplyr::rename( "plotkey" = V1, "PlotID" = V2, "VisitYear" = V4, 
+                 "PrimaryKey" = V5, "SpeciesLis" = V6)
 
-listofGEE = list(AIM_plots,ndvi_mean,ndvi_std,nbr_mean,nbr_std,tcb_mean,tcb_std,tcg_mean,tcg_std,tcw_mean,tcw_std)
+listofGEE = list(AIM_plotsDF,ndvi_mean,ndvi_std,nbr_mean,nbr_std,tcb_mean,tcb_std,tcg_mean,tcg_std,tcw_mean,tcw_std)
 # Join the zonal statistics to each plot, remove plots with NAs--likely only the dateless plot
 AIM_wGEE <- reduce(listofGEE, left_join)
-remove(ndvi_mean,ndvi_std,nbr_mean,nbr_std,tcb_mean,tcb_std,tcg_mean,tcg_std,tcw_mean,tcw_std, listofGEE)
+remove(ndvi_mean,ndvi_std,nbr_mean,nbr_std,tcb_mean,tcb_std,tcg_mean,tcg_std,tcw_mean,tcw_std, listofGEE, AIMdf)
 ```
 
 ### Calculate zonal statistics for rasters of elevation, slope, aspect, etc.
 ```{r}
+AIM_wGEE <- AIM_wGEE %>%
+  left_join(AIM_plots, "PrimaryKey") %>%
+  dplyr::select(-ends_with(".y"))
+
+AIM_wGEE_wrk <- AIM_wGEE %>%
+  separate(geometry,c("xtest", "ytest"), sep = ',') 
+
+View(AIM_wGEE_wrk)
+
+AIM_wGEE_x <- as_tibble(str_remove_all(string = AIM_wGEE_wrk$xtest, pattern = "[c(]")) 
+AIM_wGEE_y <- as_tibble(str_remove_all(string = AIM_wGEE_wrk$ytest, pattern = "[)]"))
+
+AIM_wGEE_wrk <- cbind(AIM_wGEE_wrk,as.numeric(AIM_wGEE_x))
+View(AIM_tib)
+AIM_tib = AIM_wGEE_wrk %>%
+  as_tibble() %>%
+  select(xtest)
+  
+?str_remove_all
+View(test)
+View(AIM_wGEE)
+AIM_wGEEspatial <- st_as_sf(AIM_wGEE, coords = geometry)
+
 # import physical rasters
 GBdem<- raster('data/Tiffs/GBdem_new.tif')
 GBslope<- raster('data/Tiffs/GBslope.tif')
