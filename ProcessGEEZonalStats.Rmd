@@ -32,6 +32,8 @@ tcw_std_zonal <- list.files(path = "data/zonalCSVs", pattern = "stdTCW", full.na
 listofLists = list(ndvi_mean_zonal,ndvi_std_zonal,nbr_mean_zonal,nbr_std_zonal,tcb_mean_zonal,
                    tcb_std_zonal,tcg_mean_zonal,tcg_std_zonal,tcw_mean_zonal,tcw_std_zonal)
 
+RScovariates <- length(listofLists)
+
 # create empty lists for each statistic
 ndvi_mean <- list()
 ndvi_std <- list()
@@ -93,28 +95,23 @@ remove(ndvi_mean,ndvi_std,nbr_mean,nbr_std,tcb_mean,tcb_std,tcg_mean,tcg_std,tcw
 
 ### Calculate zonal statistics for rasters of elevation, slope, aspect, etc.
 ```{r}
+######################################################
+######## Change to buffers once up and running #######
+######################################################
+
+# bind primary key to join by
 AIM_wGEE <- AIM_wGEE %>%
   left_join(AIM_plots, "PrimaryKey") %>%
   dplyr::select(-ends_with(".y"))
 
-AIM_wGEE_wrk <- AIM_wGEE %>%
-  separate(geometry,c("xtest", "ytest"), sep = ',') 
+# subset remote sensing covariate columns to bind to sf object
+to_join<- as_tibble(AIM_wGEE[6:(5+RScovariates)])
+AIM_RS = bind_cols(AIM_plots,to_join)
+View(AIM_RS)
 
-View(AIM_wGEE_wrk)
-
-AIM_wGEE_x <- as_tibble(str_remove_all(string = AIM_wGEE_wrk$xtest, pattern = "[c(]")) 
-AIM_wGEE_y <- as_tibble(str_remove_all(string = AIM_wGEE_wrk$ytest, pattern = "[)]"))
-
-AIM_wGEE_wrk <- cbind(AIM_wGEE_wrk,as.numeric(AIM_wGEE_x))
-View(AIM_tib)
-AIM_tib = AIM_wGEE_wrk %>%
-  as_tibble() %>%
-  select(xtest)
-  
-?str_remove_all
-View(test)
-View(AIM_wGEE)
-AIM_wGEEspatial <- st_as_sf(AIM_wGEE, coords = geometry)
+#####################################################
+########## Check aspect, HLI? #######################
+#####################################################
 
 # import physical rasters
 GBdem<- raster('data/Tiffs/GBdem_new.tif')
@@ -123,39 +120,53 @@ GBaspect<- raster('data/Tiffs/GBaspect.tif')
 GBtpi<- raster('data/Tiffs/GBtpi.tif')
 
 # extract raster values and mutate new column to prediction layers
-AIM_wGEE_wPhys <- AIM_wGEE %>%
-  mutate(elev = extract(x=GBdem, y=AIM_wGEE)) %>%
-  mutate(aspect = extract(x=GBaspect, y=AIM_wGEE)) %>%
-  mutate(slope = extract(x=GBslope, y=AIM_wGEE)) %>%
-  mutate(tpi = extract(x=GBtpi, y=AIM_wGEE))
-remove(GBdem,GBslope,GBaspect,GBtpi)
+AIM_RS_Phys <- as_tibble(AIM_RS) %>%
+  dplyr::mutate(elev = raster::extract(x=GBdem, y=AIM_RS)) %>%
+  dplyr::mutate(aspect = raster::extract(x=GBaspect, y=AIM_RS)) %>%
+  dplyr::mutate(slope = raster::extract(x=GBslope, y=AIM_RS)) %>%
+  dplyr::mutate(tpi = raster::extract(x=GBtpi, y=AIM_RS))
+
+AIM_RS_Phys <-AIM_wGEE_wPhys
+View(AIM_RS_Phys)
+
+# extract
 ```
 
 ### Calculate species richness values based on list
 ```{r}
 # Parse the species list strings to lists
-AIM_wGEE_wPhys_wSR <- AIM_wGEE_wPhys %>%
-  mutate(SpecList = str_split(SpeciesLis,pattern=";")) %>%
+AIM_RS_Phys_SR <- AIM_RS_Phys %>%
+  dplyr::mutate(SpecList = str_split(SpeciesLis,pattern=";")) %>%
   dplyr::select(-SpeciesLis)
+View(AIM_RS_Phys_SR)
 
 # Calculate number of species at each plot (-1 because of extra "") and bind the dataframe to predictive dataframe
 SpecN = list()
-for (i in 1:nrow(AIM_wGEE_wPhys)) {
-          SpecN[i] <- length(AIM_wGEE_wPhys_wSR$SpecList[[i]]) - 1}
+for (i in 1:nrow(AIM_RS_Phys_SR)) {
+          SpecN[i] <- length(AIM_RS_Phys_SR$SpecList[[i]]) - 1}
 SpecNdf <- data.frame(matrix(unlist(SpecN), nrow=length(SpecN), byrow=T))
-AIM_wGEE_wPhys_wSR <- bind_cols(AIM_wGEE_wPhys_wSR,SpecNdf)
+AIM_RS_Phys_SR_count <- bind_cols(AIM_RS_Phys_SR,SpecNdf)
 
+View(AIM_RS_Phys_SR_count)
 AIM_PhysRS <- AIM_wGEE_wPhys_wSR
 remove(AIM_wGEE,AIM_wGEE_wPhys,AIM_wGEE_wPhys_wSR)
 
 # Write existing table to CSV
-AIM_df <- data.frame(matrix(unlist(AIM_PhysRS), nrow=length(AIM_PhysRS), byrow=T))
-write_csv(AIMcovariates, path = "data/CSVs/AIMcovariates.csv")
+st_write(AIM_RS_Phys_SR_count, 'data/Working/AIM_covariates_wrk.shp')
 
-AIMcovariates$VisitYear
 # Read in USDA plants dataframe to get genus and species data
 # plantsList <- read_csv('data/TXT/USDA_PlantsTable.txt')
 ```
+
+
+### Read-in output CSV above to avoid running everything upstream
+```{r}
+AIM_working <- read_sf('data/Working/AIM_covariates_wrk.shp') %>%
+  st_transform(crs = 4326)
+# View(AIM_working)
+# mapview(AIM_working)
+```
+
 
 ### Assess climate covariate data (36 deg - 45 deg; 112 deg - 122 deg)
 #### Climate variables of interest are:
