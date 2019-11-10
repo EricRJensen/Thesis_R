@@ -13,7 +13,6 @@ library(sf)
 library(raster)
 library(mapview)
 library(reshape2)
-library(SparkR)
 ```
 
 ### Import zonal statistics CSVs and process to prepare for join
@@ -98,6 +97,8 @@ remove(ndvi_mean,ndvi_std,nbr_mean,nbr_std,tcb_mean,tcb_std,tcg_mean,tcg_std,tcw
 ######################################################
 ######## Change to buffers once up and running #######
 ######################################################
+AIM_buffers <- read_sf('data/AIM_modelbuff_100m.shp') %>%
+  st_transform(crs = 4326)
 
 # bind primary key to join by
 AIM_wGEE <- AIM_wGEE %>%
@@ -178,57 +179,143 @@ AIM_working <- read_sf('data/Working/AIM_covariates_wrk.shp') %>%
 - SPRP (spring precipitation)
 - SMRP (summer precipitation)
 ```{r}
-# import CSV from previous lines
+### Import CSV from previous lines
 
-# Import mosaics of desired variables
+### Import mosaics of desired variables
 cliIndexList <- c("_adi.tif", "_sdi.tif", "_sprp.tif", "_smrp.tif", "_ffp.tif", "_gsp.tif", "_map.tif")
 cliFolderList <- list()
 cliFolderList <- grep(list.files(path = 'D:/current_climates', full.names = T), pattern = "33|34|35|111|123|124", invert = T, value = T)
 
-# only create the list once--otherwise it will overwrite
+### Only create the list once--otherwise it will overwrite
 cliList <- list() 
 cliMosaic <- list()
 
-# vary the index from 1:the number of indices
-index = 2
+### Vary the index from 1:the number of indices
+index = 1
 cliIndexList[[index]]
 cliList[[index]] <- list()
 # cliList[[index]]$index <- str_replace(cliIndexList[[index]], ".tif", "")
 # cliList[[index]]$index <- str_replace(cliList[[index]]$index, "_", "")
 
+### Add each image into a list of images for a given index
 for(i in seq_along(cliFolderList)){ 
     cliList[[index]][[i]] <- raster(grep(list.files(path = cliFolderList[[i]], full.names = T), 
                             pattern = cliIndexList[[index]], value = T))}
+#View(cliList)
+cliList[[index]]$fun <- mean
+
+
+#-------------------------------------------------------------------------
+### Some indices are missing some images--this code runs for those indices
+parse1 = paste(cliFolderList, '/', sep = "")
+parse2 = paste(parse1,(substr(cliFolderList,21,31)), sep = "")
+adilist <- paste(parse2, cliIndexList[index], sep = "")
+print(adilist)
+
+adiraster <- list()
+for(i in seq_along(adilist)){
+  if (file.exists(adilist[i]))
+    adiraster[i] <- raster(adilist[i])
+}
+
+for(i in 1:99){
+  print(typeof(adiraster[[i]]))
+}
+
+adiraster$fun <- mean
+adiMosaic <- do.call(mosaic,adiraster)
+
+names(cliMosaic[[index]]) <- cliIndexList[[index]] %>% str_replace(".tif", "") %>% str_replace("_", "")
+
+#-------------------------------------------------------------------------
+### Mosaic images together for each index
 cliList[[index]]$fun <- mean
 
 cliMosaic[[index]] <- do.call(mosaic,cliList[[index]])
 names(cliMosaic[[index]]) <- cliIndexList[[index]] %>% str_replace(".tif", "") %>% str_replace("_", "")
 
-cliMosaic
+View(cliMosaic[[index]])
+plot(cliMosaic[[index]])
 
+#-------------------------------------------------------------------------
+### Write rasters
 
-# cliMosaicList <- list()
-# cliMosaicList$fun <- mean
-# rasterList <- list()
-# rasterList$fun <- mean
-# 
-# for(i in seq_along(cliIndexList)){
-#   for(j in 1:2){ #seq_along(cliFolderList)
-#     rasterList[[j]] <- raster(grep(list.files(path = cliFolderList[[j]],full.names = T), 
-#                             pattern = cliIndexList[[i]], value = T))
-#     rasterList$fun <- mean
-#     cliMosaicList[[j]] <- do.call(mosaic, rasterList)
-#     cliMosaicList$fun <- mean
-#     }
-#   }
+writeRaster(cliMosaic[[1]], filename = 'data/Tiffs/climate_adi.tif', format = "GTiff")
+writeRaster(cliMosaic[[2]], filename = 'data/Tiffs/climate_sdi.tif', format = "GTiff")
+# writeRaster(cliMosaic[[3]], filename = 'data/Tiffs/climate_sprp.tif', format = "GTiff")
+# writeRaster(cliMosaic[[4]], filename = 'data/Tiffs/climate_smrp.tif', format = "GTiff")
+# writeRaster(cliMosaic[[5]], filename = 'data/Tiffs/climate_ffp.tif', format = "GTiff")
+# writeRaster(cliMosaic[[6]], filename = 'data/Tiffs/climate_gsp.tif', format = "GTiff")
+# writeRaster(cliMosaic[[7]], filename = 'data/Tiffs/climate_map.tif', format = "GTiff")
+
+Climate_adi <- raster('data/Tiffs/climate_adi.tif')
+Climate_sdi <- raster('data/Tiffs/climate_sdi.tif')
+Climate_sprp <- raster('data/Tiffs/climate_sprp.tif')
+Climate_smrp <- raster('data/Tiffs/climate_smrp.tif')
+Climate_ffp <- raster('data/Tiffs/climate_ffp.tif')
+Climate_gsp <- raster('data/Tiffs/climate_gsp.tif')
+Climate_map <- raster('data/Tiffs/climate_map.tif')
+
+plot(Climate_map)
 ```
 
-### Assess soils data
+### Calculate zonal statistics for each climate variable of interest
 ```{r}
 
 ```
 
-### Review biophysical data
+
+
+### Import soils data
+```{r}
+SoilWater <- list()
+SoilWater[[1]] <- raster('data/Tiffs/Soil/SoilWater1.tif')
+SoilWater[[2]] <- raster('data/Tiffs/Soil/SoilWater2.tif')
+SoilWater[[3]] <- raster('data/Tiffs/Soil/SoilWater3.tif')
+SoilWater[[4]] <- raster('data/Tiffs/Soil/SoilWater4.tif')
+SoilWater$fun <- mean
+SoilWaterMosaic <- do.call(mosaic,SoilWater)
+
+SoilCarbon <- list()
+SoilCarbon[[1]] <- raster('data/Tiffs/Soil/Carbon1.tif')
+SoilCarbon[[2]] <- raster('data/Tiffs/Soil/Carbon2.tif')
+SoilCarbon[[3]] <- raster('data/Tiffs/Soil/Carbon3.tif')
+SoilCarbon[[4]] <- raster('data/Tiffs/Soil/Carbon4.tif')
+SoilCarbon$fun <- mean
+SoilCarbonMosaic <- do.call(mosaic,SoilCarbon)
+
+SoilTexture <- list()
+SoilTexture[[1]] <- raster('data/Tiffs/Soil/TextureClass1.tif')
+SoilTexture[[2]] <- raster('data/Tiffs/Soil/TextureClass2.tif')
+SoilTexture[[3]] <- raster('data/Tiffs/Soil/TextureClass3.tif')
+SoilTexture[[4]] <- raster('data/Tiffs/Soil/TextureClass4.tif')
+SoilTexture$fun <- mean
+SoilTextureMosaic <- do.call(mosaic,SoilTexture)
+
+SoilSand <- list()
+SoilSand[[1]] <- raster('data/Tiffs/Soil/Clay1.tif')
+SoilSand[[2]] <- raster('data/Tiffs/Soil/Clay2.tif')
+SoilSand[[3]] <- raster('data/Tiffs/Soil/Clay3.tif')
+SoilSand$fun <- mean
+SoilSandMosaic <- do.call(mosaic,SoilSand)
+
+SoilClay <- list()
+SoilClay[[1]] <- raster('data/Tiffs/Soil/Sand1.tif')
+SoilClay[[2]] <- raster('data/Tiffs/Soil/Sand2.tif')
+SoilClay[[3]] <- raster('data/Tiffs/Soil/Sand3.tif')
+SoilClay[[4]] <- raster('data/Tiffs/Soil/Sand4.tif')
+SoilClay$fun <- mean
+SoilClayMosaic <- do.call(mosaic,SoilClay)
+
+writeRaster(SoilWaterMosaic, filename = 'data/Tiffs/Soil/SoilWaterMosaic.tif', format = "GTiff")
+writeRaster(SoilCarbonMosaic, filename = 'data/Tiffs/Soil/SoilCarbonMosaic.tif', format = "GTiff")
+writeRaster(SoilTextureMosaic, filename = 'data/Tiffs/Soil/SoilTextureMosaic.tif', format = "GTiff")
+writeRaster(SoilSandMosaic, filename = 'data/Tiffs/Soil/SoilSandMosaic.tif', format = "GTiff")
+writeRaster(SoilClayMosaic, filename = 'data/Tiffs/Soil/SoilClayMosaic.tif', format = "GTiff")
+
+```
+
+### Calculate zonal statistics for each soils variable of interest
 ```{r}
 
 ```
