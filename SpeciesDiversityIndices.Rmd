@@ -8,12 +8,90 @@ output: html_document
 ```{r setup, include=FALSE}
 library(tidyverse) 
 library(reshape2)
+library(sf)
 ```
 
+# Read in LPI CSVs as tibbles
 ```{r}
-LPI_detail <- read_csv('data/CSVs/LPIDetailTable.csv')
-LPI_header <- read_csv('data/CSVs/LPIHeaderTable.csv')
-View(LPI_header)
+options(scipen=999)
+LPI_detail <- read_csv('data/CSVs/Full_LPIDetailTable.csv') %>%
+  select(-OBJECTID)
+LPI_header <- read_csv('data/CSVs/Full_LPIHeaderTable.csv')
+Jensen_LPI_header <- read_csv('data/CSVs/Jensen_tblLPIHeader.csv')
+#Jensen_LPI_detail <- read_csv('data/CSVs/Jensen_tblLPIDetail.csv') #-- This dataframe is needed for the below code chunk
+Jensen_LPI_detail <- read_csv('data/CSVs/Jensen_tblLPIDetail_wPlotKey.csv')
+```
+
+### Need to get PlotKeys for the Jensen_LPI_detail data to assign as primary keys (as done previously in WithholdMergeAIM script)
+```{r}
+# # Isolate rec and line keys and join to the Jensen_LPI_detail data
+# RecLineKeys <- Jensen_LPI_header %>%
+#   select(RecKey,LineKey)
+# joinedDetail_rec <- left_join(Jensen_LPI_detail, RecLineKeys, by = "RecKey")
+# 
+# # Import tbl Lines, Isolate the line and plot keys and join to the Jensen_LPI_detail data
+# Jensen_lines <- read_csv('data/CSVs/Jensen_tblLines.csv')
+# LinePlotKeys <- Jensen_lines %>%
+#   select(LineKey,PlotKey)
+# joinedDetail_recPlot <- left_join(joinedDetail_rec, LinePlotKeys, by = "LineKey")
+# 
+# # Export LPI_detail table as Jensen_TblLPIDetail_wPlotKey.csv
+# renamed_clean <- joinedDetail_recPlot %>%
+#   rename(SoilSurfac = SoilSurface, ChkboxLowe  = ChkboxLower1, ChkboxLo_1 = ChkboxLower2, ChkboxLo_2 = ChkboxLower3, ChkboxLo_3 = ChkboxLower4, HeightLowe = HeightLower1, HeightLo_1 = HeightLower2, HeightLo_2 = HeightLower3, HeightLo_3 = HeightLower4, HeightSurf = HeightSurface, HeightWood = HeightWoody, HeightHerb = HeightHerbaceous, SpeciesWoo = SpeciesWoody, SpeciesHer = SpeciesHerbaceous, ChkboxWood = ChkboxWoody, ChiboxHerb = ChkboxHerbaceous, ChkboxLo_4 = ChkboxLower5, ChkboxLo_5 = ChkboxLower6, ChkboxLo_6 = ChkboxLower7, HeightLo_4 = HeightLower5, HeightLo_5 = HeightLower6, HeightLo_6 = HeightLower7, PrimaryKey = PlotKey)
+# View(renamed_clean)
+# 
+# write_csv(renamed_clean, 'data/CSVs/Jensen_TblLPIDetail_wPlotKey.csv')
+# remove(renamed_clean,joinedDetail_rec,joinedDetail_recPlot,Jensen_lines,RecLineKeys,LinePlotKeys)
+# # Done -- This should remain commented out as a record of my workflow
+```
+
+### Need to figure out data back-up system--be an adult. https://www.crashplan.com/en-us/pricing/
+### Schedule massage
+
+
+### Clean the LPI data so that they can be combined
+```{r}
+# Convert logical columns to 0 and 1 integers
+Jensen_LPI_detail <- Jensen_LPI_detail %>%
+  mutate(ChkboxTop = as.numeric(ChkboxTop))%>%
+  mutate(ChkboxLowe = as.numeric(ChkboxLowe))%>%
+  mutate(ChkboxLo_1  = as.numeric(ChkboxLo_1))%>%
+  mutate(ChkboxLo_2 = as.numeric(ChkboxLo_2))%>%
+  mutate(ChkboxLo_3 = as.numeric(ChkboxLo_3))%>%
+  mutate(ChkboxSoil = as.numeric(ChkboxSoil))%>%
+  mutate(ChkboxLo_4 = as.numeric(ChkboxLo_4))%>%
+  mutate(ChkboxLo_5 = as.numeric(ChkboxLo_5))%>%
+  mutate(ChkboxLo_6 = as.numeric(ChkboxLo_6))%>%
+  mutate(ChkboxWood = as.numeric(ChkboxWood))%>%
+  mutate(ChiboxHerb = as.numeric(ChiboxHerb))%>%
+  mutate(ChkboxLowerHerb = as.numeric(ChkboxLowerHerb))%>%
+  mutate(PrimaryKey = as.character(PrimaryKey)) %>%
+  mutate(Source = "FieldSeason2019") # Data source column
+
+LPI_detail <- mutate(LPI_detail, Source = "AIMDataset") # Data source column
+View(LPI_detail)
+# Bind rows to produce dataframe of all observations
+LPI_combined <- Jensen_LPI_detail %>%
+  bind_rows(LPI_detail) %>% 
+  select(PointNbr,TopCanopy,Lower1,Lower2,Lower3,Lower4,Lower5,Lower6,Lower7,SoilSurfac,LineKey,PrimaryKey,Source)
+```
+
+### Convert the dataframe from wide to long
+```{r}
+# Melt the dataframe from wide to long
+MeltLPI = melt(LPI_combined, id = c('PointNbr','LineKey','PrimaryKey','Source'))
+#View(meltTest)
+
+# Filter rows that are S, L, WL, GR, ST, BR, etc.
+MeltLPI_cleaning <- MeltLPI %>%
+  filter(value == NEED the operator to in a list here!!)
+
+#View distinct values for species
+#Joining the USDA species codes will help with QC
+MeltLPI %>%
+  select(value) %>%
+  distinct() %>%
+  View()
 ```
 
 
