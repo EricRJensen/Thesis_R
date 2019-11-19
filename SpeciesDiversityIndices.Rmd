@@ -1,0 +1,19 @@
+---
+title: "SpeciesDiversityIndices"
+author: "Eric Jensen"
+date: "November 19, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse) 
+library(reshape2)
+```
+
+```{r}
+LPI_detail <- read_csv('data/CSVs/LPIDetailTable.csv')
+LPI_header <- read_csv('data/CSVs/LPIHeaderTable.csv')
+View(LPI_header)
+```
+
+

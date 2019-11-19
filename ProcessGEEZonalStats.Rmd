@@ -10,9 +10,17 @@ knitr::opts_chunk$set(echo = TRUE)
 
 library(tidyverse)
 library(sf)
-library(raster)
 library(mapview)
-library(reshape2)
+library(raster)
+library(spatialEco)
+library(randomForest)
+library(rfUtilities)
+library(corrplot)
+library(ggthemes)
+library(egg)
+library(ggpubr)
+library(spatstat)
+library(tmaptools)
 ```
 
 ### Import zonal statistics CSVs and process to prepare for join
@@ -94,43 +102,61 @@ remove(ndvi_mean,ndvi_std,nbr_mean,nbr_std,tcb_mean,tcb_std,tcg_mean,tcg_std,tcw
 
 ### Calculate zonal statistics for rasters of elevation, slope, aspect, etc.
 ```{r}
-######################################################
-######## Change to buffers once up and running #######
-######################################################
-AIM_buffers <- read_sf('data/AIM_modelbuff_100m.shp') %>%
-  st_transform(crs = 4326)
+# AIM_buffers <- read_sf('data/AIM_modelbuff_100m.shp') %>%
+#   st_transform(crs = 4326)
 
 # bind primary key to join by
-AIM_wGEE <- AIM_wGEE %>%
-  left_join(AIM_plots, "PrimaryKey") %>%
-  dplyr::select(-ends_with(".y"))
+# AIM_wGEE <- AIM_wGEE %>%
+#   left_join(AIM_plots, "PrimaryKey") %>%
+#   dplyr::select(-ends_with(".y"))
+# 
+# # subset remote sensing covariate columns to bind to sf object
+# to_join<- as_tibble(AIM_wGEE[6:(5+RScovariates)])
+# AIM_RS = bind_cols(AIM_plots,to_join)
+# View(AIM_RS)
 
-# subset remote sensing covariate columns to bind to sf object
-to_join<- as_tibble(AIM_wGEE[6:(5+RScovariates)])
-AIM_RS = bind_cols(AIM_plots,to_join)
-View(AIM_RS)
+### Produce and export biophysical rasters
+#GBslope <- terrain(GBdem, opt = 'slope', unit = 'degrees')
+# writeRaster(GBslope, filename = 'data/Tiffs/GBslope.tif', format = "GTiff")
+#GBaspect <- terrain(GBdem, opt = 'aspect', unit = 'degrees')
+#writeRaster(GBaspect, filename = 'data/Tiffs/GBaspect.tif', format = "GTiff")
+#GBtpi <- terrain(GBdem, opt = 'tpi', unit = 'degrees')
+#writeRaster(GBtpi, filename = 'data/Tiffs/GBtpi.tif', format = "GTiff")
+#GBtrasp <- trasp(GBdem)
+# GBhli <- hli(GBdem)
+# writeRaster(GBtrasp, filename = 'data/Tiffs/GBtrasp.tif', format = "GTiff")
+# writeRaster(GBhli, filename = 'data/Tiffs/GBhli.tif', format = "GTiff")
 
-#####################################################
-########## Check aspect, HLI? #######################
-#####################################################
+### Import physical rasters
+# GBdem<- raster('data/Tiffs/GBdem_new.tif')
+# GBslope<- raster('data/Tiffs/GBslope.tif')
+# GBaspect<- raster('data/Tiffs/GBaspect.tif')
+# GBtpi<- raster('data/Tiffs/GBtpi.tif')
+# GBtrasp<- raster('data/Tiffs/GBtrasp.tif')
+# GBhli<- raster('data/Tiffs/GBhli.tif')
+#GBlinaspect<- raster('data/Tiffs/GBlinaspect.tif')
 
-# import physical rasters
-GBdem<- raster('data/Tiffs/GBdem_new.tif')
-GBslope<- raster('data/Tiffs/GBslope.tif')
-GBaspect<- raster('data/Tiffs/GBaspect.tif')
-GBtpi<- raster('data/Tiffs/GBtpi.tif')
+### extract raster values and mutate new column to prediction layers
+# AIM_buffers_Phys <- as_tibble(AIM_buffers) %>%
+#   dplyr::mutate(elev = raster::extract(x=GBdem, y=AIM_buffers, fun=mean)) %>%
+#   dplyr::mutate(aspect = raster::extract(x=GBaspect, y=AIM_buffers, fun=mean)) %>%
+#   dplyr::mutate(slope = raster::extract(x=GBslope, y=AIM_buffers, fun=mean)) %>%
+#   dplyr::mutate(tpi = raster::extract(x=GBtpi, y=AIM_buffers, fun=mean))
 
-# extract raster values and mutate new column to prediction layers
-AIM_RS_Phys <- as_tibble(AIM_RS) %>%
-  dplyr::mutate(elev = raster::extract(x=GBdem, y=AIM_RS)) %>%
-  dplyr::mutate(aspect = raster::extract(x=GBaspect, y=AIM_RS)) %>%
-  dplyr::mutate(slope = raster::extract(x=GBslope, y=AIM_RS)) %>%
-  dplyr::mutate(tpi = raster::extract(x=GBtpi, y=AIM_RS))
+# AIM_covariates_cli_soil_physwrk <- as_tibble(AIM_covariates_cli_soil) %>%
+#   dplyr::mutate(hli = raster::extract(x=GBhli, y=AIM_covariates_cli_soil, fun=mean)) %>%
+#   dplyr::mutate(linaspect = raster::extract(x=GBlinaspect, y=AIM_covariates_cli_soil, fun=mean)) %>%
+#   dplyr::mutate(trasp = raster::extract(x=GBtrasp, y=AIM_covariates_cli_soil, fun=mean))
 
-AIM_RS_Phys <-AIM_wGEE_wPhys
-View(AIM_RS_Phys)
-
-# extract
+# # Get latitude as covariate
+# AIM_plots <- read_sf('data/PlotsShapefiles/AIM_model.shp') %>%
+#   st_transform(crs = 4326)
+# AIM_plots <- AIM_plots %>%
+#     mutate(long = unlist(map(AIM_plots$geometry,1)),
+#            lat = unlist(map(AIM_plots$geometry,2)))
+# AIM_covariates_wlat <- bind_cols(AIM_covariates,select(AIM_plots, lat))
+# View(AIM_covariates_wlat)
+# st_write(AIM_covariates_wlat, 'data/Working/AIM_covariates_working_final.shp')
 ```
 
 ### Calculate species richness values based on list
@@ -153,7 +179,7 @@ AIM_PhysRS <- AIM_wGEE_wPhys_wSR
 remove(AIM_wGEE,AIM_wGEE_wPhys,AIM_wGEE_wPhys_wSR)
 
 # Write existing table to CSV
-st_write(AIM_RS_Phys_SR_count, 'data/Working/AIM_covariates_wrk.shp')
+st_write(AIM_covariates, 'data/Working/AIM_covariates.shp')
 
 # Read in USDA plants dataframe to get genus and species data
 # plantsList <- read_csv('data/TXT/USDA_PlantsTable.txt')
@@ -162,8 +188,9 @@ st_write(AIM_RS_Phys_SR_count, 'data/Working/AIM_covariates_wrk.shp')
 
 ### Read-in output CSV above to avoid running everything upstream
 ```{r}
-AIM_working <- read_sf('data/Working/AIM_covariates_wrk.shp') %>%
+AIM_working <- read_sf('data/Working/AIM_covariates.shp') %>%
   st_transform(crs = 4326)
+
 # View(AIM_working)
 # mapview(AIM_working)
 ```
@@ -179,150 +206,472 @@ AIM_working <- read_sf('data/Working/AIM_covariates_wrk.shp') %>%
 - SPRP (spring precipitation)
 - SMRP (summer precipitation)
 ```{r}
-### Import CSV from previous lines
-
-### Import mosaics of desired variables
-cliIndexList <- c("_adi.tif", "_sdi.tif", "_sprp.tif", "_smrp.tif", "_ffp.tif", "_gsp.tif", "_map.tif")
-cliFolderList <- list()
-cliFolderList <- grep(list.files(path = 'D:/current_climates', full.names = T), pattern = "33|34|35|111|123|124", invert = T, value = T)
-
-### Only create the list once--otherwise it will overwrite
-cliList <- list() 
-cliMosaic <- list()
-
-### Vary the index from 1:the number of indices
-index = 1
-cliIndexList[[index]]
-cliList[[index]] <- list()
-# cliList[[index]]$index <- str_replace(cliIndexList[[index]], ".tif", "")
-# cliList[[index]]$index <- str_replace(cliList[[index]]$index, "_", "")
-
-### Add each image into a list of images for a given index
-for(i in seq_along(cliFolderList)){ 
-    cliList[[index]][[i]] <- raster(grep(list.files(path = cliFolderList[[i]], full.names = T), 
-                            pattern = cliIndexList[[index]], value = T))}
-#View(cliList)
-cliList[[index]]$fun <- mean
-
-
-#-------------------------------------------------------------------------
-### Some indices are missing some images--this code runs for those indices
-parse1 = paste(cliFolderList, '/', sep = "")
-parse2 = paste(parse1,(substr(cliFolderList,21,31)), sep = "")
-adilist <- paste(parse2, cliIndexList[index], sep = "")
-print(adilist)
-
-adiraster <- list()
-for(i in seq_along(adilist)){
-  if (file.exists(adilist[i]))
-    adiraster[i] <- raster(adilist[i])
-}
-
-for(i in 1:99){
-  print(typeof(adiraster[[i]]))
-}
-
-adiraster$fun <- mean
-adiMosaic <- do.call(mosaic,adiraster)
-
-names(cliMosaic[[index]]) <- cliIndexList[[index]] %>% str_replace(".tif", "") %>% str_replace("_", "")
-
-#-------------------------------------------------------------------------
-### Mosaic images together for each index
-cliList[[index]]$fun <- mean
-
-cliMosaic[[index]] <- do.call(mosaic,cliList[[index]])
-names(cliMosaic[[index]]) <- cliIndexList[[index]] %>% str_replace(".tif", "") %>% str_replace("_", "")
-
-View(cliMosaic[[index]])
-plot(cliMosaic[[index]])
-
-#-------------------------------------------------------------------------
-### Write rasters
-
-writeRaster(cliMosaic[[1]], filename = 'data/Tiffs/climate_adi.tif', format = "GTiff")
-writeRaster(cliMosaic[[2]], filename = 'data/Tiffs/climate_sdi.tif', format = "GTiff")
+# ### Import CSV from previous lines
+# 
+# ### Import mosaics of desired variables
+# cliIndexList <- c("_adi.tif", "_sdi.tif", "_sprp.tif", "_smrp.tif", "_ffp.tif", "_gsp.tif", "_map.tif")
+# cliFolderList <- list()
+# cliFolderList <- grep(list.files(path = 'D:/current_climates', full.names = T), pattern = "33|34|35|111|123|124", invert = T, value = T)
+# 
+# ### Only create the list once--otherwise it will overwrite
+# cliList <- list() 
+# cliMosaic <- list()
+# 
+# ### Vary the index from 1:the number of indices
+# index = 2
+# cliIndexList[[index]]
+# cliList[[index]] <- list()
+# # cliList[[index]]$index <- str_replace(cliIndexList[[index]], ".tif", "")
+# # cliList[[index]]$index <- str_replace(cliList[[index]]$index, "_", "")
+# 
+# ### Add each image into a list of images for a given index
+# for(i in seq_along(cliFolderList)){ 
+#     cliList[[index]][[i]] <- raster(grep(list.files(path = cliFolderList[[i]], full.names = T), 
+#                             pattern = cliIndexList[[index]], value = T))}
+# #View(cliList)
+# cliList[[index]]$fun <- mean
+# 
+# 
+# #-------------------------------------------------------------------------
+# ### Some indices are missing some images--this code runs for those indices
+# parse1 = paste(cliFolderList, '/', sep = "")
+# parse2 = paste(parse1,(substr(cliFolderList,21,31)), sep = "")
+# sdilist <- paste(parse2, cliIndexList[index], sep = "")
+# print(sdilist)
+# 
+# sdiraster <- vector(mode = "list", length = 99)
+# 
+# # Create list of Raster files (should be cleaning it as well but doesn't seem to want to)
+# for(i in seq_along(sdilist)){
+#   if(file.exists(sdilist[i]) == T)
+#     sdiraster[[i]] <- raster(sdilist[i])
+# }
+# # Clean the list by removing NULL values
+# for(i in 1:length(sdiraster)){
+#   if(is.null(sdiraster[[i]])==TRUE)
+#     sdiraster[[i]] <- NULL
+# }
+# 
+# for(i in 1:length(sdiraster)){
+#   print(is.null(sdiraster))}
+# 
+# # Necessary to apply the do.call
+# names(sdiraster) <- NULL
+# sdiraster$fun <- mean
+# # Run the do.call over the list of items to mosaic
+# sdiMosaic <- do.call(mosaic,sdiraster)
+# 
+# names(cliMosaic[[index]]) <- cliIndexList[[index]] %>% str_replace(".tif", "") %>% str_replace("_", "")
+# 
+# #-------------------------------------------------------------------------
+# ### Mosaic images together for each index
+# cliList[[index]]$fun <- mean
+# 
+# cliMosaic[[index]] <- do.call(mosaic,cliList[[index]])
+# names(cliMosaic[[index]]) <- cliIndexList[[index]] %>% str_replace(".tif", "") %>% str_replace("_", "")
+# 
+# View(cliMosaic[[index]])
+# plot(cliMosaic[[index]])
+# 
+# #-------------------------------------------------------------------------
+# ### Write rasters
+# 
+# writeRaster(adiMosaic, filename = 'data/Tiffs/climate_adi.tif', format = "GTiff")
+# writeRaster(sdiMosaic, filename = 'data/Tiffs/climate_sdi.tif', format = "GTiff")
 # writeRaster(cliMosaic[[3]], filename = 'data/Tiffs/climate_sprp.tif', format = "GTiff")
 # writeRaster(cliMosaic[[4]], filename = 'data/Tiffs/climate_smrp.tif', format = "GTiff")
 # writeRaster(cliMosaic[[5]], filename = 'data/Tiffs/climate_ffp.tif', format = "GTiff")
 # writeRaster(cliMosaic[[6]], filename = 'data/Tiffs/climate_gsp.tif', format = "GTiff")
 # writeRaster(cliMosaic[[7]], filename = 'data/Tiffs/climate_map.tif', format = "GTiff")
 
-Climate_adi <- raster('data/Tiffs/climate_adi.tif')
-Climate_sdi <- raster('data/Tiffs/climate_sdi.tif')
-Climate_sprp <- raster('data/Tiffs/climate_sprp.tif')
-Climate_smrp <- raster('data/Tiffs/climate_smrp.tif')
-Climate_ffp <- raster('data/Tiffs/climate_ffp.tif')
-Climate_gsp <- raster('data/Tiffs/climate_gsp.tif')
-Climate_map <- raster('data/Tiffs/climate_map.tif')
-
-plot(Climate_map)
 ```
 
 ### Calculate zonal statistics for each climate variable of interest
 ```{r}
-
+# ### Import climate mosaics
+# Climate_adi <- raster('data/Tiffs/climate_adi.tif')
+# Climate_sdi <- raster('data/Tiffs/climate_sdi.tif')
+# Climate_sprp <- raster('data/Tiffs/climate_sprp.tif')
+# Climate_smrp <- raster('data/Tiffs/climate_smrp.tif')
+# Climate_ffp <- raster('data/Tiffs/climate_ffp.tif')
+# Climate_gsp <- raster('data/Tiffs/climate_gsp.tif')
+# Climate_map <- raster('data/Tiffs/climate_map.tif')
+# 
+# AIM_working_cli <- as_tibble(AIM_working) %>%
+#   dplyr::mutate(Cli_adi = raster::extract(x=Climate_adi, y=AIM_working, fun=mean)) %>%
+#   dplyr::mutate(Cli_sdi = raster::extract(x=Climate_sdi, y=AIM_working, fun=mean)) %>%
+#   dplyr::mutate(Cli_sprp= raster::extract(x=Climate_sprp, y=AIM_working, fun=mean)) %>%
+#   dplyr::mutate(Cli_smrp= raster::extract(x=Climate_smrp, y=AIM_working, fun=mean)) %>%
+#   dplyr::mutate(Cli_ffp = raster::extract(x=Climate_ffp, y=AIM_working, fun=mean)) %>%
+#   dplyr::mutate(Cli_gsp = raster::extract(x=Climate_gsp, y=AIM_working, fun=mean)) %>%
+#   dplyr::mutate(Cli_map = raster::extract(x=Climate_map, y=AIM_working, fun=mean))
+# 
+# # write the new table to shapefile
+# st_write(AIM_working_cli, 'data/Working/AIM_covariates_cli.shp')
 ```
 
-
-
-### Import soils data
+### Mosaic soils data and export mosaics
 ```{r}
-SoilWater <- list()
-SoilWater[[1]] <- raster('data/Tiffs/Soil/SoilWater1.tif')
-SoilWater[[2]] <- raster('data/Tiffs/Soil/SoilWater2.tif')
-SoilWater[[3]] <- raster('data/Tiffs/Soil/SoilWater3.tif')
-SoilWater[[4]] <- raster('data/Tiffs/Soil/SoilWater4.tif')
-SoilWater$fun <- mean
-SoilWaterMosaic <- do.call(mosaic,SoilWater)
-
-SoilCarbon <- list()
-SoilCarbon[[1]] <- raster('data/Tiffs/Soil/Carbon1.tif')
-SoilCarbon[[2]] <- raster('data/Tiffs/Soil/Carbon2.tif')
-SoilCarbon[[3]] <- raster('data/Tiffs/Soil/Carbon3.tif')
-SoilCarbon[[4]] <- raster('data/Tiffs/Soil/Carbon4.tif')
-SoilCarbon$fun <- mean
-SoilCarbonMosaic <- do.call(mosaic,SoilCarbon)
-
-SoilTexture <- list()
-SoilTexture[[1]] <- raster('data/Tiffs/Soil/TextureClass1.tif')
-SoilTexture[[2]] <- raster('data/Tiffs/Soil/TextureClass2.tif')
-SoilTexture[[3]] <- raster('data/Tiffs/Soil/TextureClass3.tif')
-SoilTexture[[4]] <- raster('data/Tiffs/Soil/TextureClass4.tif')
-SoilTexture$fun <- mean
-SoilTextureMosaic <- do.call(mosaic,SoilTexture)
-
-SoilSand <- list()
-SoilSand[[1]] <- raster('data/Tiffs/Soil/Clay1.tif')
-SoilSand[[2]] <- raster('data/Tiffs/Soil/Clay2.tif')
-SoilSand[[3]] <- raster('data/Tiffs/Soil/Clay3.tif')
-SoilSand$fun <- mean
-SoilSandMosaic <- do.call(mosaic,SoilSand)
-
-SoilClay <- list()
-SoilClay[[1]] <- raster('data/Tiffs/Soil/Sand1.tif')
-SoilClay[[2]] <- raster('data/Tiffs/Soil/Sand2.tif')
-SoilClay[[3]] <- raster('data/Tiffs/Soil/Sand3.tif')
-SoilClay[[4]] <- raster('data/Tiffs/Soil/Sand4.tif')
-SoilClay$fun <- mean
-SoilClayMosaic <- do.call(mosaic,SoilClay)
-
-writeRaster(SoilWaterMosaic, filename = 'data/Tiffs/Soil/SoilWaterMosaic.tif', format = "GTiff")
-writeRaster(SoilCarbonMosaic, filename = 'data/Tiffs/Soil/SoilCarbonMosaic.tif', format = "GTiff")
-writeRaster(SoilTextureMosaic, filename = 'data/Tiffs/Soil/SoilTextureMosaic.tif', format = "GTiff")
-writeRaster(SoilSandMosaic, filename = 'data/Tiffs/Soil/SoilSandMosaic.tif', format = "GTiff")
-writeRaster(SoilClayMosaic, filename = 'data/Tiffs/Soil/SoilClayMosaic.tif', format = "GTiff")
-
+# library(raster)
+# SoilWater <- list()
+# SoilWater$fun <- mean
+# SoilWater[[1]] <- raster('data/Tiffs/Soil/SoilWater1.tif')
+# SoilWater[[2]] <- raster('data/Tiffs/Soil/SoilWater2.tif')
+# SoilWater[[3]] <- raster('data/Tiffs/Soil/SoilWater3.tif')
+# SoilWater[[4]] <- raster('data/Tiffs/Soil/SoilWater4.tif')
+# names(SoilWater) <- NULL
+# SoilWater$fun <- mean
+# SoilWaterMosaic <- do.call(mosaic,SoilWater)
+# 
+# SoilCarbon <- list()
+# SoilCarbon[[1]] <- raster('data/Tiffs/Soil/Carbon1.tif')
+# SoilCarbon[[2]] <- raster('data/Tiffs/Soil/Carbon2.tif')
+# SoilCarbon[[3]] <- raster('data/Tiffs/Soil/Carbon3.tif')
+# SoilCarbon[[4]] <- raster('data/Tiffs/Soil/Carbon4.tif')
+# names(SoilCarbon) <- NULL
+# SoilCarbon$fun <- mean
+# SoilCarbonMosaic <- do.call(mosaic,SoilCarbon)
+# 
+# SoilTexture <- list()
+# SoilTexture[[1]] <- raster('data/Tiffs/Soil/TextureClass1.tif')
+# SoilTexture[[2]] <- raster('data/Tiffs/Soil/TextureClass2.tif')
+# SoilTexture[[3]] <- raster('data/Tiffs/Soil/TextureClass3.tif')
+# SoilTexture[[4]] <- raster('data/Tiffs/Soil/TextureClass4.tif')
+# names(SoilTexture) <- NULL
+# SoilTexture$fun <- mean
+# SoilTextureMosaic <- do.call(mosaic,SoilTexture)
+# 
+# SoilSand <- list()
+# SoilSand[[1]] <- raster('data/Tiffs/Soil/Clay1.tif')
+# SoilSand[[2]] <- raster('data/Tiffs/Soil/Clay2.tif')
+# SoilSand[[3]] <- raster('data/Tiffs/Soil/Clay3.tif')
+# names(SoilSand) <- NULL
+# SoilSand$fun <- mean
+# SoilSandMosaic <- do.call(mosaic,SoilSand)
+# 
+# SoilClay <- list()
+# SoilClay[[1]] <- raster('data/Tiffs/Soil/Sand1.tif')
+# SoilClay[[2]] <- raster('data/Tiffs/Soil/Sand2.tif')
+# SoilClay[[3]] <- raster('data/Tiffs/Soil/Sand3.tif')
+# SoilClay[[4]] <- raster('data/Tiffs/Soil/Sand4.tif')
+# names(SoilClay) <- NULL
+# SoilClay$fun <- mean
+# SoilClayMosaic <- do.call(mosaic,SoilClay)
+# 
+# writeRaster(SoilWaterMosaic,  filename = 'data/Tiffs/Soil/SoilWaterMosaic.tif', format = "GTiff")
+# writeRaster(SoilCarbonMosaic, filename = 'data/Tiffs/Soil/SoilCarbonMosaic.tif', format = "GTiff")
+# writeRaster(SoilTextureMosaic,filename = 'data/Tiffs/Soil/SoilTextureMosaic.tif', format = "GTiff")
+# writeRaster(SoilSandMosaic,   filename = 'data/Tiffs/Soil/SoilSandMosaic.tif', format = "GTiff")
+# writeRaster(SoilClayMosaic,   filename = 'data/Tiffs/Soil/SoilClayMosaic.tif', format = "GTiff")
 ```
 
 ### Calculate zonal statistics for each soils variable of interest
 ```{r}
+### Read-insoils mosaics
+SoilWaterMosaic <- raster('data/Tiffs/Soil/SoilWaterMosaic.tif')
+SoilCarbonMosaic <- raster('data/Tiffs/Soil/SoilCarbonMosaic.tif')
+SoilTextureMosaic <- raster('data/Tiffs/Soil/SoilTextureMosaic.tif')
+SoilSandMosaic <- raster('data/Tiffs/Soil/SoilSandMosaic.tif')
+SoilClayMosaic <- raster('data/Tiffs/Soil/SoilClayMosaic.tif')
 
+AIM_working_cli_soil <- as_tibble(AIM_working) %>%
+  dplyr::mutate(soil_h2o = raster::extract(x=SoilWaterMosaic, y=AIM_working, fun=mean)) %>%
+  dplyr::mutate(soil_C = raster::extract(x=SoilCarbonMosaic, y=AIM_working, fun=mean)) %>%
+  dplyr::mutate(soil_tex = raster::extract(x=SoilTextureMosaic, y=AIM_plots, fun=mean)) %>% #needs to be points, because classes
+  dplyr::mutate(soil_snd = raster::extract(x=SoilSandMosaic, y=AIM_working, fun=mean)) %>%
+  dplyr::mutate(soil_cly = raster::extract(x=SoilClayMosaic, y=AIM_working, fun=mean))
+
+# Write to shapefile once zonal statistics have been calculated
+st_write(AIM_working_cli_soil, 'data/Working/AIM_covariates_cli_soil.shp')
+```
+
+########### MASK FORESTS BEFORE PREDICTIVE MASKS ###############
+########## Move modeling portion to another script #############
+
+################## Random Forest Modeling ######################
+### Model Selection
+
+### Clean covariate data for modeling
+```{r}
+### Assess missing values and anything else to clean up
+AIM_covariates <- read_sf('data/Working/AIM_covariates_model.shp') %>%
+  st_transform(crs = 4326)
+AIM_covariates <- st_centroid(AIM_covariates)
+# Remove columns not needed for modeling
+AIM_covariates <- dplyr::select(AIM_covariates, -c('PlotKey','VisitDate', 'PrimaryKey', 'SpeciesLis', 'sl_tx_c')) #removed soil texture class because it's a factor, not numeric
+
+# Remove plots with NAs for one or more variable 
+AIM_model <- AIM_covariates %>%
+  drop_na()
+```
+
+```{r}
+### Generate random number to set seed
+# sample(1:1000000,1)
+rf_seed = 517953
+set.seed(rf_seed)
+
+# Put in base R dataframe for RF model
+AIM_rf <- data.frame(AIM_model[,3],AIM_model[,4:31])
+#View(AIM_rf)
+
+# ##### Subset data to test model selection and model fit #####
+# # Model selection
+# AIM_rf_subs <- slice(AIM_rf,1:500)
+# rfselSubs <- rf.modelSel(xdata = AIM_rf_subs[,2:29], ydata = AIM_rf_subs[,1], r = c(0.1, 0.2, 0.5, 0.7, 0.9))
+# rfselSubs$selvars
+# 
+# # Model fitting
+# rfselDF_sub <- data.frame(AIM_rf_subs[,1], AIM_rf_subs[c("elev", "ndvi_mn", "ndv_stD", "nbr_men", "tcg_men", "tcg_stD", "Cli_adi", "Cli_sdi", "Cl_sprp", "Cl_smrp", "Cli_ffp", "Cli_gsp", "Cli_map", "lat")])
+# 
+# rf_fit_sub = randomForest(x = rfselDF_sub[2:15], y= rfselDF_sub[,1])
+# print(rf_fit_sub)
+
+##### Run on full dataset #####
+View(AIM_rf)
+predictors = AIM_rf[,2:29]
+response = AIM_rf[,1]
+rfselFull = rf.modelSel(xdata = predictors, ydata = response, r = c(0.1, 0.2, 0.5, 0.7, 0.9)) # Need to assess parsimony in future models
+
+plot(rfselFull)
+
+rfselFull <- cbind(rownames(rfselFull$sel.importance), rfselFull$sel.importance)
+rownames(rfselFull) <- NULL
+colnames(rfselFull) <- c("name", "imp")
+
+rfselFull_ord <- rfselFull[order(-rfselFull$imp),]
+nrow(rfselFull_ord)
+# drop columns that are not as important based on rfmodelsel
+
+raster_cov_names <- rfselFull_ord$name[1:14]
+
+rastercolumns_cov <- predictors[,as.character(raster_cov_names)]#[-c(4,5,6,9,8,7)]]
+
+# calculate correlation coefficient matrix
+correlation <-cor(rastercolumns_cov, method="pearson")
+
+# plot the correlation. the darker the number, the more correlated the two
+# variables
+corrplot(correlation,method="number")
+
+rastercolumns_full <- predictors[,as.character(raster_cov_names)]
+rastercolumns_6var <- predictors[,as.character(raster_cov_names)[-c(7:14)]]
+rastercolumns_7var <- predictors[,as.character(raster_cov_names)[-c(7,8,9,11,12,13,14)]]
+
+# calculate correlation coefficient matrix for the variables for the two models
+correlation6 <-cor(rastercolumns_6var, method="pearson")
+correlation7 <-cor(rastercolumns_7var, method="pearson")
+
+# plot the correlation. the darker the number, the more correlated the twovariables
+corrplot(correlation6,method="number")
+corrplot(correlation7,method="number")
+
+rfselFull$selvars
+## You can now manually remove any variables that are above your correlation 
+## threshold. In this case we will just leave them all in, but we could remove
+## them by using the following code
+
+###### Model fitting
+data_cov_model6 <- cbind(rastercolumns_6var, specN= response)
+data_cov_model7 <- cbind(rastercolumns_7var, specN= response)
+data_cov_modelFull <- cbind(rastercolumns_full, specN= response)
+
+# Now let's restrict our final predictors to those that are most important (Change manually) 
+# and run the continuous model
+
+rf_model6 = randomForest(specN ~ ., data=data_cov_model6, importance = TRUE, ntree = 3000, mtry = 2)
+rf_model7 = randomForest(specN ~ ., data=data_cov_model7, importance = TRUE, ntree = 3000, mtry = 2)
+rf_modelFull = randomForest(specN ~ ., data=data_cov_modelFull, importance = TRUE, ntree = 3000, mtry = 2)
+
+model6varEx <- round(rf_model6$rsq[3000], digits = 4)
+model7varEx <- round(rf_model7$rsq[3000], digits = 4)
+modelFullvarEx <- round(rf_modelFull$rsq[3000], digits = 4)
+
+# 
+# # Model fitting
+# rfselDF <- data.frame(AIM_rf[,1], AIM_rf[c("elev", "slope", "ndvi_mn", "tcb_men", "tcg_men", "Cli_adi", "Cli_sdi", "Cl_sprp", "Cli_ffp", "Cli_map", "soil_h2", "sol_cly", "trasp", "lat")])
+# varsel_cor <- cor(AIM_rf[c("elev", "slope", "ndvi_mn", "tcb_men", "tcg_men", "Cli_adi", "Cli_sdi", "Cl_sprp", "Cli_ffp", "Cli_map", "soil_h2", "sol_cly", "trasp", "lat")])
+# corrplot(varsel_cor, method = "number")
+# 
+# rf_fit <- list()
+# rf_fit[[3]] = randomForest(x = rfselDF[2:length(rfselDF)], y= rfselDF[,1], ntree = 3000, importance=TRUE)
+
+# Assess model outputs
+rf_model6
+rf_model7
+rf_modelFull
+sig_test<-rf.significance(rf_fit1000, rfselDF[2:length(rfselDF)])
+imp_test<-importance(rf_fit[[1]])
+plot(rf_fit500$rsq)
+varImpPlot(rf_fit[[1]])
+importance(rf_fit)
+```
+
+```{r}
+predicted6<-rf_model6$predicted
+predicted7<-rf_model7$predicted
+predictedFull <-rf_modelFull$predicted
+
+# plot observed values on the x-axis and predicted values on the y-axis. we are
+# looking for these to be correlated (so close to a 1:1 line)
+# Plot as Alpha ggplot
+assess6 <- bind_cols(predict = predicted6, response = response)
+assess7 <- bind_cols(predict = predicted7, response = response)
+assessFull <- bind_cols(predict = predictedFull, response = response)
+
+test<-matrix(c(response, predicted6, predicted7, predictedFull),nrow=len)
+
+var6 <- text_grob(paste("Variance explained =", as.character(model6varEx[1:4]), sep = "\n"), x = .2, y = .9)
+var7 <- text_grob(paste("Variance explained =", as.character(model7varEx[1:4]), sep = "\n"), x = .2, y = .9)
+varFull <- text_grob(paste("Variance explained =", as.character(modelFullvarEx[1:4]), sep = "\n"), x = .2, y = .9)
+
+gg6var <- ggplot(assess6, aes(x=response, y = predict)) +
+  geom_point(alpha=.2, color = 'blue') +
+  geom_smooth(method='lm',formula=y~x, color = 'red') +
+  labs(x = "Observed diversity", y = "Predicted diversity") +
+  annotation_custom(var6) +
+  theme_few()
+gg7var <- ggplot(assess7, aes(x=response, y = predict)) +
+  geom_point(alpha=.2, color = 'blue') +
+  geom_smooth(method='lm',formula=y~x, color = 'red') +
+  labs(x = "Observed diversity", y = "Predicted diversity") +
+  annotation_custom(var7) +
+  theme_few()
+ggfullvar <- ggplot(assessFull, aes(x=response, y = predict)) +
+  geom_point(alpha=.2, color = 'blue') +
+  geom_smooth(method='lm',formula=y~x, color = 'red') +
+  labs(x = "Observed diversity", y = "Predicted diversity") +
+  annotation_custom(varFull) +
+  theme_few()
+model_comp <- egg::ggarrange(gg6var, ggfullvar, nrow = 1)
+annotate_figure(model_comp, top = text_grob("Comparing models with 6 and 14 variables", face = 'bold', size = 18))
+
+# Calculate RMSE for the models
+error6 <- predicted6 - response
+error7 <- predicted7 - response
+errorFull <- predictedFull - response
+
+sqError6 <- error6^2
+sqError7 <- error7^2
+sqErrorFull <- errorFull^2
+
+rmse <- function(error)
+{
+  sqrt(mean(error^2))
+}
+
+RMSE6 <- rmse(error6)
+RMSE7 <- rmse(error7)
+RMSEfull <- rmse(errorFull)
+
+AIM_error6 <- bind_cols(error6 = error6,sqError6 = sqError6)
+AIM_error7 <- bind_cols(error7 = error7,sqError7 = sqError7)
+AIM_errorFull <- bind_cols(errorFull = errorFull,sqErrorFull = sqErrorFull)
+AIM_error <- AIM_model %>%
+  dplyr::select(1:2,32) %>%
+  bind_cols(AIM_error6) %>%
+  bind_cols(AIM_error7) %>%
+  bind_cols(AIM_errorFull)
+
+class(AIM_error)
+View(AIM_error)
+AIM_error_spatial <- st_sf(AIM_error)
+HighError <- AIM_error_spatial %>%
+  filter(errorFull >= 12 | errorFull <= -12) 
+# 690 entries
+RandomSample <- AIM_error[sample(1:nrow(AIM_error), nrow(HighError),
+   replace=FALSE),]
+RandomSampleSpat <-st_sf(RandomSample)
+
+# Plot KDEs for each
+highSP <- as(HighError, "Spatial")
+highKDE <- sp.kde(testSP,n = 5000, bw = .4)
+plot(highKDE)
+
+writeRaster(highKDE,filename = 'data/Tiffs/highErrorKDE.tif', format = "GTiff")
+st_write(HighError, 'data/Working/HighError.shp')
+
+randomSP <- as(RandomSampleSpat, "Spatial")
+randomKDE <- sp.kde(randomSP,n = 5000, bw = .4)
+plot(randomKDE)
+
+writeRaster(randomKDE,  filename = 'data/Tiffs/randomSampleKDE.tif', format = "GTiff")
+st_write(RandomSample, 'data/Working/RandomSample.shp')
+
+mapview(HighError,cex = 3, zcol = 'errorFull')
+
+mapview(RandomSampleSpat,cex = 3, zcol = 'errorFull')
 ```
 
 
 
+### Load GEE 2017 data for predictive mapping
+```{r}
+ndvi2017<- raster('data/Tiffs/GEE2017/ndvi2017.tif')
+nbr2017 <- raster('data/Tiffs/GEE2017/nbr2017.tif')
+tcb2017 <- raster('data/Tiffs/GEE2017/tcb2017.tif')
+tcg2017 <- raster('data/Tiffs/GEE2017/tcg2017.tif')
+tcw2017 <- raster('data/Tiffs/GEE2017/tcw2017.tif')
+plot(ndvi2017)
+plot(nbr2017)
+plot(tcb2017)
+plot(tcg2017)
+plot(tcw2017)
+
+# Import independent validation data
+AIM_covariates <- read_sf('data/PlotsShapefiles/AIM_validate.shp') %>%
+  st_transform(crs = 4326)
+View(AIM_covariates)
 
 
+testPredict <- predict(rf_fit1000)
+### Reports accuracy, Cohen's kappa and area under ROC curve
+testAssessPred <- accuracy(x = rf_fit1000, resp)
+```
 
+```{r}
+# Import shapefile to clip
+GBsubset <- read_sf('data/Shapefiles/ProjectSubset.shp') %>%
+  st_transform(crs = 4326)
 
+# Rasters needed to predict
+tcb <- raster('data/Tiffs/GEE2017/tcb2017.tif')
+tcg <- raster('data/Tiffs/GEE2017/tcg2017.tif')
+cli_ffp <- raster('data/Tiffs/Cli/climate_ffp.tif')
+trasp <- raster('data/Tiffs/Phys/GBtrasp.tif')
+soil_h20 <- raster('data/Tiffs/Soil/SoilWaterMosaic.tif')
+
+# Clip rasters to GB bounds
+tcb_clip <- crop(tcb, GBsubset)
+tcg_clip <- crop(tcg, GBsubset)
+cli_ffp_clip <- crop(cli_ffp, GBsubset)
+trasp_clip <- crop(trasp, GBsubset)
+soil_h20_clip <- crop(soil_h20, GBsubset)
+plot(tcb_clip)
+plot(tcg_clip)
+plot(cli_ffp_clip)
+plot(trasp_clip)
+plot(soil_h20_clip)
+
+trasp_clip$extent
+tcb_clip
+tcg_clip
+cli_ffp_clip
+soil_h20_clip
+
+mapview(GBsubset)
+
+extent_proj = st_transform(extent,crs = 4326)
+mapview(extent)
+
+tcb_proj <- projectRaster(tcb_clip, crs="+proj=longlat +datum=WGS84")
+tcg_proj <- projectRaster(tcg_clip, crs="+proj=longlat +datum=WGS84")
+cli_ffp_proj <- projectRaster(cli_ffp_clip, crs="+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")
+trasp_proj <- projectRaster(trasp_clip, crs="+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")
+soil_h20_proj <- projectRaster(soil_h20_clip, crs="+proj=longlat +datum=WGS84")
+
+stack_5band=stack(tcb_clip, tcg_clip, cli_ffp_clip, clip, clip)
+
+latitude
+
+```

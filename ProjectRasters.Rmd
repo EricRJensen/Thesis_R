@@ -1,0 +1,48 @@
+---
+title: "ProjectRasters"
+author: "Eric Jensen"
+date: "November 18, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(raster)
+library(tidyverse)
+```
+
+## Import climate variables
+```{r}
+cli_adi <- raster('data/Tiffs/Cli/climate_adi.tif')
+cli_ffp <- raster('data/Tiffs/Cli/climate_ffp.tif')
+cli_gsp <- raster('data/Tiffs/Cli/climate_gsp.tif')
+cli_map <- raster('data/Tiffs/Cli/climate_map.tif')
+cli_sdi <- raster('data/Tiffs/Cli/climate_sdi.tif')
+cli_smrp <- raster('data/Tiffs/Cli/climate_smrp.tif')
+cli_sprp <- raster('data/Tiffs/Cli/climate_sprp.tif')
+```
+
+## Define CRS for climate data
+```{r}
+crs(cli_adi) <- "+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"
+crs(cli_ffp) <- "+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"
+crs(cli_gsp) <- "+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"
+crs(cli_map) <- "+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"
+crs(cli_sdi) <- "+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"
+crs(cli_smrp) <- "+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"
+crs(cli_sprp) <- "+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"
+```
+
+## Write climate rasters to overwrite previous iterations
+```{r}
+writeRaster(cli_adi, filename = 'data/Tiffs/climate_adi.tif', format = "GTiff")
+writeRaster(cli_ffp, filename = 'data/Tiffs/climate_sdi.tif', format = "GTiff")
+writeRaster(cli_gsp, filename = 'data/Tiffs/climate_sprp.tif', format = "GTiff")
+writeRaster(cli_map, filename = 'data/Tiffs/climate_smrp.tif', format = "GTiff")
+writeRaster(cli_sdi, filename = 'data/Tiffs/climate_ffp.tif', format = "GTiff")
+writeRaster(cli_smrp, filename = 'data/Tiffs/climate_gsp.tif', format = "GTiff")
+writeRaster(cli_sprp, filename = 'data/Tiffs/climate_map.tif', format = "GTiff")
+```
+
+
+
+
