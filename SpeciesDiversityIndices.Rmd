@@ -45,9 +45,6 @@ Jensen_LPI_detail <- read_csv('data/CSVs/Jensen_tblLPIDetail_wPlotKey.csv')
 # # Done -- This should remain commented out as a record of my workflow
 ```
 
-### Need to figure out data back-up system--be an adult. https://www.crashplan.com/en-us/pricing/
-### Schedule massage
-
 
 ### Clean the LPI data so that they can be combined
 ```{r}
@@ -69,29 +66,162 @@ Jensen_LPI_detail <- Jensen_LPI_detail %>%
   mutate(Source = "FieldSeason2019") # Data source column
 
 LPI_detail <- mutate(LPI_detail, Source = "AIMDataset") # Data source column
-View(LPI_detail)
+# View(LPI_detail)
 # Bind rows to produce dataframe of all observations
+# Soil surface hits are not included because if a species is a basal hit then it will also be included in the point as an upper point hit.
 LPI_combined <- Jensen_LPI_detail %>%
   bind_rows(LPI_detail) %>% 
-  select(PointNbr,TopCanopy,Lower1,Lower2,Lower3,Lower4,Lower5,Lower6,Lower7,SoilSurfac,LineKey,PrimaryKey,Source)
+  select(PointNbr,TopCanopy,Lower1,Lower2,Lower3,Lower4,Lower5,Lower6,Lower7,LineKey,PrimaryKey,Source)
 ```
 
 ### Convert the dataframe from wide to long
+
+#### Filter out all "None" points
 ```{r}
 # Melt the dataframe from wide to long
 MeltLPI = melt(LPI_combined, id = c('PointNbr','LineKey','PrimaryKey','Source'))
 #View(meltTest)
 
-# Filter rows that are S, L, WL, GR, ST, BR, etc.
-MeltLPI_cleaning <- MeltLPI %>%
-  filter(value == NEED the operator to in a list here!!)
-
-#View distinct values for species
-#Joining the USDA species codes will help with QC
-MeltLPI %>%
+# Assess the outcome
+noNone_strings = MeltLPI %>%
   select(value) %>%
+  filter(value != 'None') %>%
+  group_by(value) %>%
+  mutate('count' = n()) %>%
+  distinct()
+# View(noNone_strings)
+
+MeltLPI_woNone = filter(MeltLPI, value != 'None') 
+#View(MeltLPI_woNone)
+remove(MeltLPI,noNone_strings)
+```
+
+#### Assess codes of 3 characters or fewer
+```{r}
+# View distinct values for species
+# Joining the USDA species codes will help with QC
+# Filter by number of characters and the count for each
+# Need to remove non-species hits somehow
+short_strings = MeltLPI_woNone %>%
+  select(value) %>%
+  filter(!nchar(value) >3) %>%
+  group_by(value) %>%
+  mutate('count' = n()) %>%
+  distinct()
+#View(short_strings)
+
+#Based on this assessment I will remove all observations of three characters or fewer--See "Processing AIM Species Data" Google Doc for justification, removed below
+
+MeltLPI_woShort = filter(MeltLPI_woNone, nchar(value) >3) 
+#View(MeltLPI_woShort)
+remove(MeltLPI_woNone,short_strings)
+```
+
+#### Assess all unknown plant codes
+```{r}
+# Isolate and count unknown plants codes in the LPI dataset
+unk_codes = c('^AF0','^AF1','^AF2','^AF3','^AF4','^AF5','^AF6','^AF7','^AF8','^AF9',
+              '^PF0','^PF1','^PF2','^PF3','^PF4','^PF5','^PF6','^PF7','^PF8','^PF9',
+              '^AG0','^AG1','^AG2','^AG3','^AG4','^AG5','^AG6','^AG7','^AG8','^AG9', 
+              '^PG0','^PG1','^PG2','^PG3','^PG4','^PG5','^PG6','^PG7','^PG8','^PG9',
+              '^SH0','^SH1','^SH2','^SH3','^SH4','^SH5','^SH6','^SH7','^SH8','^SH9',
+              '^AAFF','^AFAF','^AAGG','^AGAG','^PPFF','^PFPF','^PPGG','^PGPG','^SHSH', '^PPSH', '^PPGG')
+
+unk_strings = MeltLPI_woShort %>%
+  select(value) %>%
+  filter(grepl(paste(unk_codes,collapse='|'),value)) %>%
+  group_by(value) %>%
+  mutate('count' = n()) %>%
+  distinct()
+#View(unk_strings)
+
+# Compare number of unknowns with total observations in the datebase
+## Sum the total number of points in the database
+total_obs = MeltLPI_woShort %>%
+  select(value) %>%
+  group_by(value) %>%
+  mutate('count' = n()) %>%
+  distinct()
+#View(total_obs)
+
+sum_total = sum(total_obs$count)
+sum_unk = sum(unk_strings$count)
+sum_unk / sum_total
+## Unknowns comprise just over 1 percent of all points
+
+MeltLPI_ready = filter(MeltLPI_woShort, !grepl(paste(unk_codes,collapse='|'),value)) 
+#View(MeltLPI_ready)
+
+remove(total_obs,unk_strings,unk_codes,MeltLPI_woShort,sum_unk, sum_total)
+```
+#### Note: Data are now cleaned enough to work directly with the species data as observations and to join and compare them with the PLANTS database
+
+### Assess remaining observations in the context of the USDA PLANTS database
+#### Join LPI codes to USDA PLANTS codes
+```{r}
+# Read in USDA plants dataframe to get genus and species data
+# I combined the complete USDA PLANTS list with the Nevada, Oregon, Idaho, Utah, and California PLANTS list to create the below list
+plantsList <- read_csv('data/TXT/Combined_PlantsTable_wAdditions.txt') %>%
+  rename('SynSym' = 'Synonym Symbol') %>% 
+  rename('LatinName' = 'Scientific Name with Author') %>%
+  rename('CommonName' = 'Common Name') %>%
+  distinct()
+#View(plantsList)
+
+# Remove rows of plants list with synonym symbols and keep only those with NA
+plantsList = filter(plantsList,is.na(SynSym)) 
+#View(plantsList)
+
+# Join the USDA plants data to the value column
+lpi_plants = MeltLPI_ready %>%
+  select(value) %>%
+  rename(Symbol = value) %>%
+  group_by(Symbol) %>%
+  mutate('count' = n()) %>%
   distinct() %>%
-  View()
+  left_join(plantsList, 'Symbol') 
+#View(lpi_plants)
+```
+
+#### Match NA codes to Synonym Symbols, as possible
+```{r}
+# Filter down to those rows that were not joined previously
+lpi_plants_na = lpi_plants %>%
+  filter(is.na(LatinName))
+#View(lpi_plants_na)
+
+# Reimport PLANTS database and keep the Species Synonyms
+plantsList_wSyn <- read_csv('data/TXT/Combined_PlantsTable_wAdditions.txt') %>%
+  rename('SynSym' = 'Synonym Symbol') %>% 
+  rename('LatinName' = 'Scientific Name with Author') %>%
+  rename('CommonName' = 'Common Name') %>%
+  distinct()
+#View(plantsList_wSyn)
+
+# Join the unjoined LPI observations to the Synonym Symbols
+lpi_plants_na_join = lpi_plants_na %>%
+  select(Symbol, count) %>%
+  left_join(plantsList_wSyn, c('Symbol' = 'SynSym')) %>%
+  filter(!is.na(LatinName)) %>% 
+  select(-'Family') %>%
+  rename('SynSym' = 'Symbol.y') %>%
+  distinct()
+#View(lpi_plants_na_join)
+
+# Bind joined rows from "SynSym" to the above rows joined to "Symbol"
+```
+
+#### Assess remaining unjoined plants
+```{r}
+lpi_still_na = lpi_plants_na %>%
+  select(Symbol, count) %>%
+  left_join(plantsList_wSyn, c('Symbol' = 'SynSym')) %>%
+  filter(is.na(LatinName))
+View(lpi_still_na)
+# Have reduced the number of unknown species significantly! Need to figure out how to treat these though
 ```
 
 
+#########################################################################################################
+### Need to figure out data back-up system--be an adult. https://www.crashplan.com/en-us/pricing/ #######
+#########################################################################################################
