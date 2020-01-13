@@ -7,6 +7,7 @@ output: html_document
 
 ```{r setup, include=FALSE}
 library(tidyverse) 
+library(reshape)
 library(reshape2)
 library(sf)
 ```
@@ -72,6 +73,7 @@ LPI_detail <- mutate(LPI_detail, Source = "AIMDataset") # Data source column
 LPI_combined <- Jensen_LPI_detail %>%
   bind_rows(LPI_detail) %>% 
   select(PointNbr,TopCanopy,Lower1,Lower2,Lower3,Lower4,Lower5,Lower6,Lower7,LineKey,PrimaryKey,Source)
+#View(LPI_combined)
 ```
 
 ### Convert the dataframe from wide to long
@@ -80,7 +82,7 @@ LPI_combined <- Jensen_LPI_detail %>%
 ```{r}
 # Melt the dataframe from wide to long
 MeltLPI = melt(LPI_combined, id = c('PointNbr','LineKey','PrimaryKey','Source'))
-#View(meltTest)
+#View(MeltLPI)
 
 # Assess the outcome
 noNone_strings = MeltLPI %>%
@@ -89,7 +91,7 @@ noNone_strings = MeltLPI %>%
   group_by(value) %>%
   mutate('count' = n()) %>%
   distinct()
-# View(noNone_strings)
+#View(noNone_strings)
 
 MeltLPI_woNone = filter(MeltLPI, value != 'None') 
 #View(MeltLPI_woNone)
@@ -117,7 +119,7 @@ MeltLPI_woShort = filter(MeltLPI_woNone, nchar(value) >3)
 remove(MeltLPI_woNone,short_strings)
 ```
 
-#### Assess all unknown plant codes
+#### Remove all unknown plant codes
 ```{r}
 # Isolate and count unknown plants codes in the LPI dataset
 unk_codes = c('^AF0','^AF1','^AF2','^AF3','^AF4','^AF5','^AF6','^AF7','^AF8','^AF9',
@@ -147,12 +149,12 @@ total_obs = MeltLPI_woShort %>%
 sum_total = sum(total_obs$count)
 sum_unk = sum(unk_strings$count)
 sum_unk / sum_total
-## Unknowns comprise just over 1 percent of all points
+## Unknowns comprise just over 1.2 percent of all points
 
 MeltLPI_ready = filter(MeltLPI_woShort, !grepl(paste(unk_codes,collapse='|'),value)) 
 #View(MeltLPI_ready)
 
-remove(total_obs,unk_strings,unk_codes,MeltLPI_woShort,sum_unk, sum_total)
+remove(total_obs,unk_strings,unk_codes,MeltLPI_woShort,sum_unk, sum_total,Jensen_LPI_detail,Jensen_LPI_header)
 ```
 #### Note: Data are now cleaned enough to work directly with the species data as observations and to join and compare them with the PLANTS database
 
@@ -162,9 +164,9 @@ remove(total_obs,unk_strings,unk_codes,MeltLPI_woShort,sum_unk, sum_total)
 # Read in USDA plants dataframe to get genus and species data
 # I combined the complete USDA PLANTS list with the Nevada, Oregon, Idaho, Utah, and California PLANTS list to create the below list
 plantsList <- read_csv('data/TXT/Combined_PlantsTable_wAdditions.txt') %>%
-  rename('SynSym' = 'Synonym Symbol') %>% 
-  rename('LatinName' = 'Scientific Name with Author') %>%
-  rename('CommonName' = 'Common Name') %>%
+  dplyr::rename('SynSym' = 'Synonym Symbol') %>%
+  dplyr::rename('LatinName' = 'Scientific Name with Author') %>%
+  dplyr::rename('CommonName' = 'Common Name') %>%
   distinct()
 #View(plantsList)
 
@@ -173,47 +175,52 @@ plantsList = filter(plantsList,is.na(SynSym))
 #View(plantsList)
 
 # Join the USDA plants data to the value column
-lpi_plants = MeltLPI_ready %>%
+lpi_plants_join = MeltLPI_ready %>%
   select(value) %>%
-  rename(Symbol = value) %>%
+  dplyr::rename(Symbol = value) %>%
   group_by(Symbol) %>%
   mutate('count' = n()) %>%
   distinct() %>%
   left_join(plantsList, 'Symbol') 
-#View(lpi_plants)
+#View(lpi_plants_join)
+
+# Create dataframe of joined species
+lpi_plants_joined = filter(lpi_plants_join, !is.na(LatinName))
+#View(lpi_plants_joined)
 ```
 
 #### Match NA codes to Synonym Symbols, as possible
 ```{r}
 # Filter down to those rows that were not joined previously
-lpi_plants_na = lpi_plants %>%
+lpi_plants_unjoined = lpi_plants_join %>%
   filter(is.na(LatinName))
-#View(lpi_plants_na)
+#View(lpi_plants_unjoined)
 
 # Reimport PLANTS database and keep the Species Synonyms
 plantsList_wSyn <- read_csv('data/TXT/Combined_PlantsTable_wAdditions.txt') %>%
-  rename('SynSym' = 'Synonym Symbol') %>% 
-  rename('LatinName' = 'Scientific Name with Author') %>%
-  rename('CommonName' = 'Common Name') %>%
+  dplyr::rename('SynSym' = 'Synonym Symbol') %>% 
+  dplyr::rename('LatinName' = 'Scientific Name with Author') %>%
+  dplyr::rename('CommonName' = 'Common Name') %>%
   distinct()
 #View(plantsList_wSyn)
 
 # Join the unjoined LPI observations to the Synonym Symbols
-lpi_plants_na_join = lpi_plants_na %>%
+lpi_plants_unjoined_joined = lpi_plants_unjoined %>%
   select(Symbol, count) %>%
   left_join(plantsList_wSyn, c('Symbol' = 'SynSym')) %>%
-  filter(!is.na(LatinName)) %>% 
-  select(-'Family') %>%
-  rename('SynSym' = 'Symbol.y') %>%
+  filter(!is.na(LatinName)) %>%
+  dplyr::rename('SynSym' = 'Symbol.y') %>%
   distinct()
-#View(lpi_plants_na_join)
+#View(lpi_plants_unjoined_joined)
 
 # Bind joined rows from "SynSym" to the above rows joined to "Symbol"
+lpi_plants_bind <- rbind(lpi_plants_joined, lpi_plants_unjoined_joined)
+#View(lpi_plants_bind)
 ```
 
 #### Assess remaining unjoined plants
 ```{r}
-lpi_still_na = lpi_plants_na %>%
+lpi_still_na = lpi_plants_unjoined %>%
   select(Symbol, count) %>%
   left_join(plantsList_wSyn, c('Symbol' = 'SynSym')) %>%
   filter(is.na(LatinName))
@@ -225,3 +232,73 @@ View(lpi_still_na)
 #########################################################################################################
 ### Need to figure out data back-up system--be an adult. https://www.crashplan.com/en-us/pricing/ #######
 #########################################################################################################
+
+### Apply the USDA PLANTS joins to the full dataset of plants
+```{r}
+# Read in USDA plants dataframe to get genus and species data
+# I combined the complete USDA PLANTS list with the Nevada, Oregon, Idaho, Utah, and California PLANTS list to create the below list
+plantsList <- read_csv('data/TXT/Combined_PlantsTable_wAdditions.txt') %>%
+  dplyr::rename('SynSym' = 'Synonym Symbol') %>%
+  dplyr::rename('LatinName' = 'Scientific Name with Author') %>%
+  dplyr::rename('CommonName' = 'Common Name') %>%
+  distinct()
+View(plantsList)
+
+# Remove rows of plants list with synonym symbols and keep only those with NA
+plantsList = filter(plantsList,is.na(SynSym)) 
+#View(plantsList)
+
+# Join the USDA plants data to the value column
+lpi_USDA_full_join = MeltLPI_ready %>%
+  dplyr::rename(Symbol = value) %>%
+  left_join(plantsList, 'Symbol') 
+View(lpi_USDA_full_join)
+
+# Create dataframe of joined species
+lpi_USDA_full_joined = filter(lpi_USDA_full_join, !is.na(LatinName))
+#View(lpi_plants_joined)
+```
+
+#### Match NA codes to Synonym Symbols, as possible
+```{r}
+# Filter down to those rows that were not joined previously
+lpi_USDA_full_unjoined = lpi_USDA_full_join %>%
+  filter(is.na(LatinName)) %>%
+  select(-c(SynSym, LatinName,CommonName,Family))
+View(lpi_USDA_full_unjoined)
+
+# Reimport PLANTS database and keep the Species Synonyms
+plantsList_wSyn <- read_csv('data/TXT/Combined_PlantsTable_wAdditions.txt') %>%
+  dplyr::rename('SynSym' = 'Synonym Symbol') %>% 
+  dplyr::rename('LatinName' = 'Scientific Name with Author') %>%
+  dplyr::rename('CommonName' = 'Common Name') %>%
+  distinct()
+View(plantsList_wSyn)
+
+# Join the unjoined LPI observations to the Synonym Symbols
+lpi_USDA_full_unjoined_joined = lpi_USDA_full_unjoined %>%
+  left_join(plantsList_wSyn, c('Symbol' = 'SynSym')) %>%
+  filter(!is.na(LatinName)) %>%
+  dplyr::rename('SynSym' = 'Symbol.y') %>%
+  select(-Family) %>%
+  mutate("Family" = NA) %>% #remove family because of issues with duplication, can add later
+  distinct()
+View(lpi_USDA_full_unjoined_joined)
+View(lpi_USDA_full_joined)
+
+# Bind joined rows from "SynSym" to the above rows joined to "Symbol"
+lpi_plants_bind <- rbind(lpi_USDA_full_joined, lpi_USDA_full_unjoined_joined)
+View(lpi_plants_bind)
+
+# Count number of unjoined rows and as a percentage of the total points that we tried to be joined
+nrow(lpi_USDA_full_unjoined)-nrow(lpi_USDA_full_unjoined_joined)
+# 3550, not bad!
+(nrow(lpi_USDA_full_unjoined)-nrow(lpi_USDA_full_unjoined_joined)) / ((nrow(lpi_USDA_full_unjoined)-nrow(lpi_USDA_full_unjoined_joined)) + nrow(lpi_plants_bind))
+#Less than 3/10 of a percent
+```
+
+### Calculate Species Diversity Indices
+```{r}
+#Work with the "lpi_plants_bind"" data
+```
+
