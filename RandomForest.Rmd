@@ -1,0 +1,573 @@
+---
+title: "ProcessGEEZonalStats"
+author: "Eric Jensen"
+date: "October 28, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(randomForest)
+library(rfUtilities)
+library(corrplot)
+library(ggthemes)
+library(egg)
+library(ggpubr)
+library(spatstat)
+```
+
+### Import zonal statistics CSVs and process to prepare for join
+```{r}
+BioPhys_mean = read_csv('data/GEEZonalCSVs/Biophysical_Predictors_Mean.csv')
+BioPhys_mode = read_csv('data/GEEZonalCSVs/Biophysical_Predictors_Mode.csv')
+Climate_ann = read_csv('data/GEEZonalCSVs/Climate_predictors_annual.csv')
+Climate_mean = read_csv('data/GEEZonalCSVs/Climate_Predictors_Mean.csv')
+Soil = read_csv('data/GEEZonalCSVs/Soil_Predictors.csv')
+Fire = read_csv('data/GEEZonalCSVs/Fire_Predictors.csv')
+RemSens = read_csv('data/GEEZonalCSVs/RS_Predictors.csv')
+RemSens_clust = read_csv('data/GEEZonalCSVs/RS_clust_predictors.csv')
+```
+
+Remove NAs from remote sensing data
+```{r}
+RemSens_clean <- RemSens %>%
+  dplyr::select(-c(.geo, VisitYear)) %>%
+  dplyr::select(-1) %>%
+  drop_na() %>%
+  mutate(B1_cv = B1_sd/B1_mn) %>% #Mutate coefficent of variation columns
+  mutate(B2_cv = B2_sd/B2_mn) %>%
+  mutate(B3_cv = B3_sd/B3_mn) %>%
+  mutate(B4_cv = B4_sd/B4_mn) %>%
+  mutate(B5_cv = B5_sd/B5_mn) %>%
+  mutate(B7_cv = B7_sd/B7_mn) %>%
+  mutate(MSAVI2_cv = MSAVI2_sd/MSAVI2_mn) %>%
+  mutate(SAVI_cv = SAVI_sd/SAVI_mn) %>%
+  mutate(SATVI_cv = SATVI_sd/SATVI_mn) %>%
+  mutate(NBR_cv = NBR_sd/NBR_mn) %>%
+  mutate(NDMI_cv = NDMI_sd/NDMI_mn) %>%
+  mutate(NDVI_cv = NDVI_sd/NDVI_mn) %>%
+  mutate(TCA_cv = TCA_sd/TCA_mn) %>%
+  mutate(TCG_cv = TCG_sd/TCB_mn) %>%
+  mutate(TCW_cv = TCW_sd/TCW_mn) %>%
+  mutate(TCB_cv = TCB_sd/TCB_mn) 
+```
+
+Calculate proportion of distinct classes to number of cells in unsupervised classification data
+```{r}
+RemSens_clust = RemSens_clust %>%
+  mutate(k25_prop = kmeans25_distcount/kmeans25_count) %>%
+  mutate(k50_prop = kmeans50_distcount/kmeans50_count) %>%
+  mutate(k100_prop = kmeans100_distcount/kmeans100_count) %>%
+  mutate(k200_prop = kmeans200_distcount/kmeans200_count) %>%
+  select(-c('kmeans25_count','kmeans50_count','kmeans100_count','kmeans200_count','CountNorm')) %>%
+  filter(k25_prop != 'inf')
+```
+
+Clean the imported predictor CSVs
+```{r}
+BioPhys_mean_clean = BioPhys_mean %>%
+  dplyr::select(-c(.geo, PlotKey, SpeciesLis, VisitDate)) %>%
+  dplyr::select(-1) 
+
+clean_df <- function(df){
+  df %>%
+  dplyr::select(-c(PlotID, .geo, PlotKey, SpeciesLis, VisitDate, VisitYear,1))}
+
+BioPhys_mode_clean <- clean_df(BioPhys_mode) %>% mutate(landform = mode) %>% dplyr::select(-mode)
+Climate_ann_clean <- clean_df(Climate_ann)
+Climate_mean_clean <- clean_df(Climate_mean)
+Soil_clean <- clean_df(Soil)
+RemSens_clust_clean <- clean_df(RemSens_clust) 
+Fire_clean <- clean_df(Fire) %>% dplyr::select(-c(YearsOfMTBS,LastFire))%>%replace(., is.na(.), 0)
+
+remove(BioPhys_mean,BioPhys_mode,Climate_ann,Climate_mean,Soil,Fire,RemSens,RemSens_clust)
+```
+
+Join the dataframes together in multiple ways
+ALL PREDICTORS
+```{r}
+Predictors_all <- BioPhys_mean_clean %>%
+  left_join(BioPhys_mode_clean, by = 'PrimaryKey') %>%
+  left_join(RemSens_clean, by = 'PrimaryKey') %>%
+  left_join(RemSens_clust_clean, by = 'PrimaryKey') %>%
+  left_join(Soil_clean, by = 'PrimaryKey') %>%
+  left_join(Fire_clean, by = 'PrimaryKey') %>%
+  left_join(Climate_ann_clean, by = 'PrimaryKey') %>%
+  left_join(Climate_mean_clean, by = 'PrimaryKey') %>%
+  drop_na() %>%
+  setNames(paste0('p.', names(.))) %>% #add p prefix to denote predictors
+  rename('PrimaryKey' = 'p.PrimaryKey', 'PlotID' = 'p.PlotID', 'VisitYear' = 'p.VisitYear') # revert names of non-predictors
+
+#not sure where the 70 nas are coming from
+
+#remove(Fire_clean,Soil_clean,RemSens_clean,RemSens_clust_clean,BioPhys_mean_clean,BioPhys_mode_clean,Climate_mean_clean,Climate_ann_clean)
+```
+
+REMOVING PREDICTORS FOR INDIVIDUAL BANDS
+```{r}
+Predictors_noBands <- BioPhys_mean_clean %>%
+  left_join(BioPhys_mode_clean, by = 'PrimaryKey') %>%
+  left_join(RemSens_clean%>%select(-starts_with('B')), by = 'PrimaryKey') %>% #remove columns that start with 'B'
+  left_join(RemSens_clust_clean, by = 'PrimaryKey') %>%
+  left_join(Soil_clean, by = 'PrimaryKey') %>%
+  left_join(Fire_clean, by = 'PrimaryKey') %>%
+  left_join(Climate_ann_clean, by = 'PrimaryKey') %>%
+  left_join(Climate_mean_clean, by = 'PrimaryKey') %>%
+  drop_na() %>%
+  setNames(paste0('p.', names(.))) %>% #add p prefix to denote predictors
+  rename('PrimaryKey' = 'p.PrimaryKey', 'PlotID' = 'p.PlotID', 'VisitYear' = 'p.VisitYear') # revert names of non-predictors
+  
+  #not sure where the 70 nas are coming from
+
+#remove(Fire_clean,Soil_clean,RemSens_clean,RemSens_clust_clean,BioPhys_mean_clean,BioPhys_mode_clean,Climate_mean_clean,Climate_ann_clean)
+```
+
+REMOVING 30-YEAR MEAN CLIMATE DATA
+```{r}
+Predictors_noCliMn <- BioPhys_mean_clean %>%
+  left_join(BioPhys_mode_clean, by = 'PrimaryKey') %>%
+  left_join(RemSens_clean, by = 'PrimaryKey') %>% #remove columns that start with 'B'
+  left_join(RemSens_clust_clean, by = 'PrimaryKey') %>%
+  left_join(Soil_clean, by = 'PrimaryKey') %>%
+  left_join(Fire_clean, by = 'PrimaryKey') %>%
+  left_join(Climate_ann_clean, by = 'PrimaryKey') %>%
+  drop_na() %>%
+  setNames(paste0('p.', names(.))) %>% #add p prefix to denote predictors
+  rename('PrimaryKey' = 'p.PrimaryKey', 'PlotID' = 'p.PlotID', 'VisitYear' = 'p.VisitYear') # revert names of non-predictors
+
+#not sure where the 70 nas are coming from
+
+#remove(Fire_clean,Soil_clean,RemSens_clean,RemSens_clust_clean,BioPhys_mean_clean,BioPhys_mode_clean,Climate_mean_clean,Climate_ann_clean)
+```
+
+REMOVING BANDS PREDICTORS AND 30-YEAR MEAN CLIMATE DATA
+```{r}
+Predictors_noCliMn_noBands <- BioPhys_mean_clean %>%
+  left_join(BioPhys_mode_clean, by = 'PrimaryKey') %>%
+  left_join(RemSens_clean%>%select(-starts_with('B')), by = 'PrimaryKey') %>% #remove columns that start with 'B'
+  left_join(RemSens_clust_clean, by = 'PrimaryKey') %>%
+  left_join(Soil_clean, by = 'PrimaryKey') %>%
+  left_join(Fire_clean, by = 'PrimaryKey') %>%
+  left_join(Climate_ann_clean, by = 'PrimaryKey') %>%
+  drop_na() %>%
+  setNames(paste0('p.', names(.))) %>% #add p prefix to denote predictors
+  rename('PrimaryKey' = 'p.PrimaryKey', 'PlotID' = 'p.PlotID', 'VisitYear' = 'p.VisitYear') # revert names of non-predictors
+
+#not sure where the 70 nas are coming from
+
+remove(Fire_clean,Soil_clean,RemSens_clean,RemSens_clust_clean,BioPhys_mean_clean,BioPhys_mode_clean,Climate_mean_clean,Climate_ann_clean,clean_df)
+```
+
+# Import spatial plots and join with GEE zonal stats--largely unnecessary
+```{r}
+# library(sf)
+# # Import plots sf for joining GEE zonal stats too
+# AIM_plots <- read_sf('data/Shapefiles/AIM_model.shp') %>%
+#   st_transform(crs = 4326)
+# # Convert to tibble without geometry for manipulating and joining
+# AIMdf <- as_data_frame(matrix(unlist(AIM_plots), nrow=nrow(AIM_plots), byrow=F))
+# AIM_plotsDF <- AIMdf %>%
+#   dplyr::select(-V3, -V7, -V8) %>%
+#   dplyr::rename( "plotkey" = V1, "PlotID" = V2, "VisitYear" = V4, 
+#                  "PrimaryKey" = V5, "SpeciesLis" = V6)
+# 
+# listofGEE = list(AIM_plotsDF,ndvi_mean,ndvi_std,nbr_mean,nbr_std,tcb_mean,tcb_std,tcg_mean,tcg_std,tcw_mean,tcw_std)
+# # Join the zonal statistics to each plot, remove plots with NAs--likely only the dateless plot
+# AIM_wGEE <- reduce(listofGEE, left_join)
+```
+
+### Import Species Diversity data
+```{r}
+Responses = read_csv('data/CSVs/ResponseVariables.csv') %>% setNames(paste0('r.', names(.))) %>% rename('PrimaryKey' = 'r.PrimaryKey')
+```
+
+Join the predictors and responses together
+```{r}
+BuildModelTable = function(preds){
+  table <- preds %>%
+            dplyr::select(-c(PlotID, VisitYear)) %>%
+            full_join(Responses, 'PrimaryKey') %>%
+            drop_na() 
+  return(table)}
+
+# All responses
+ModelTable_all = BuildModelTable(Predictors_all)
+# All predictors except individual bands
+ModelTable_noBands = BuildModelTable(Predictors_noBands)
+# All responses except 30-year climate means
+ModelTable_noCliMn = BuildModelTable(Predictors_noCliMn)
+ModelTable_noCliMn = subset(ModelTable_noCliMn, PrimaryKey %in% ModelTable_all$PrimaryKey)
+# All responses except individual bands and 30-year climate means
+ModelTable_noCliMn_noBands = BuildModelTable(Predictors_noCliMn_noBands)
+ModelTable_noCliMn_noBands= subset(ModelTable_noCliMn_noBands, PrimaryKey %in% ModelTable_all$PrimaryKey)
+
+remove(Predictors_all,Predictors_noBands,Predictors_noCliMn,Predictors_noCliMn_noBands)
+```
+
+################## Random Forest Modeling ######################
+### Prepare Data for Model Selection
+```{r}
+### Generate random number to set seed
+# sample(1:1000000,1)
+rf_seed = 517953
+set.seed(rf_seed)
+
+## Subset dataframe into predictors and responses
+subset_preds = function(ModelTable){
+       predictors = ModelTable %>%
+                       dplyr::select(starts_with('p.')) %>%
+                       mutate(p.landform_v = factor(ModelTable$p.landform)) %>%
+                       dplyr::select(-p.landform)
+       return(predictors)}
+
+Preds_All = subset_preds(ModelTable_all)
+Preds_NoBands = subset_preds(ModelTable_noBands)
+Preds_NoCliMn = subset_preds(ModelTable_noCliMn)
+Preds_NoCliMn_NoBands = subset_preds(ModelTable_noCliMn_noBands)
+
+subset_resp = function(ModelTable){
+       responses = ModelTable %>%
+                       dplyr::select(starts_with('r.'))
+       return(responses)}
+
+Resps_All = subset_resp(ModelTable_all)
+remove(ModelTable_all,ModelTable_noBands,ModelTable_noCliMn,ModelTable_noCliMn_noBands,Responses)
+```
+
+Assess individual predictors against responses
+```{r}
+# Shannon_cor = t(data.frame(cor(responses$Shannon, predictors%>%dplyr::select(-landform_v))))
+# InvSimp_cor = t(data.frame(cor(responses$InvSimp, predictors%>%dplyr::select(-landform_v))))
+# Simpson_cor = t(data.frame(cor(responses$Simpson, predictors%>%dplyr::select(-landform_v))))
+# Pielou_cor = t(data.frame(cor(responses$Pielou, predictors%>%dplyr::select(-landform_v))))
+# renyi0_cor = t(data.frame(cor(responses$renyi0, predictors%>%dplyr::select(-landform_v))))
+# renyi.5_cor = t(data.frame(cor(responses$renyi.5, predictors%>%dplyr::select(-landform_v))))
+# renyi1_cor = t(data.frame(cor(responses$renyi1, predictors%>%dplyr::select(-landform_v))))
+# renyi2_cor = t(data.frame(cor(responses$renyi2, predictors%>%dplyr::select(-landform_v))))
+# renyi4_cor = t(data.frame(cor(responses$renyi4, predictors%>%dplyr::select(-landform_v))))
+# renyi16_cor = t(data.frame(cor(responses$renyi16, predictors%>%dplyr::select(-landform_v))))
+# renyi64_cor = t(data.frame(cor(responses$renyi64, predictors%>%dplyr::select(-landform_v))))
+# hill0_cor = t(data.frame(cor(responses$hill0, predictors%>%dplyr::select(-landform_v))))
+# hill.5_cor = t(data.frame(cor(responses$hill.5, predictors%>%dplyr::select(-landform_v))))
+# hill1_cor = t(data.frame(cor(responses$hill1, predictors%>%dplyr::select(-landform_v))))
+# hill2_cor = t(data.frame(cor(responses$hill2, predictors%>%dplyr::select(-landform_v))))
+# hill4_cor = t(data.frame(cor(responses$hill4, predictors%>%dplyr::select(-landform_v))))
+# hill16_cor = t(data.frame(cor(responses$hill16, predictors%>%dplyr::select(-landform_v))))
+# hill64_cor = t(data.frame(cor(responses$hill64, predictors%>%dplyr::select(-landform_v))))
+# SpecRich_cor = t(data.frame(cor(responses$SpecRich, predictors%>%dplyr::select(-landform_v))))
+# PredNames = colnames(predictors[2:94])
+# 
+# options(scipen = 999)
+# Cor_df = bind_cols(Preds=PredNames,Shan=Shannon_cor,Simp=Simpson_cor,ISimp=InvSimp_cor,Pielou=Pielou_cor,Ren0=renyi0_cor,Ren.5=renyi.5_cor,Ren1=renyi1_cor,Ren2=renyi2_cor,Ren4=renyi4_cor,Ren16=renyi16_cor,Ren64=renyi64_cor,hill0=hill0_cor,hill.5=hill.5_cor,hill1=hill1_cor,hill2=hill2_cor,hill4=hill4_cor,hill16=hill16_cor,hill64=hill64_cor, SpRi = SpecRich_cor)
+# 
+# corrplot(Cor_df)
+# 
+# remove(Shannon_cor,Simpson_cor,InvSimp_cor,Pielou_cor,renyi.5_cor,renyi0_cor,renyi16_cor,renyi1_cor,renyi2_cor,renyi4_cor,renyi64_cor,hill.5_cor,hill0_cor,hill1_cor,hill16_cor,hill2_cor,hill4_cor,hill64_cor,SpecRich_cor)
+```
+
+```{r}
+# # Get mean correlation across all responses
+# # Convert df to absolute values
+# Corr_df_abs <- abs(Cor_df[2:20])
+# predNames <- data.frame(Cor_df[1])
+# predCor <- data.frame(rowMeans(Corr_df_abs))
+# predRank <- cbind(predNames,predCor)
+# View(predRank)
+# 
+# # Get mean correlation across all predictors
+# colMeans(Corr_df_abs)
+```
+
+Random forest variable selection
+```{r}
+# rfselShan = rf.modelSel(xdata = predictors, ydata = responses$Shannon, r = c(0.1, 0.2, 0.5, 0.7, 0.9)) 
+# rfselSimp = rf.modelSel(xdata = predictors, ydata = responses$Simpson, r = c(0.1, 0.2, 0.5, 0.7, 0.9)) 
+# rfselISimp = rf.modelSel(xdata = predictors, ydata = responses$InvSimp, r = c(0.1, 0.2, 0.5, 0.7, 0.9)) 
+# rfselPielou = rf.modelSel(xdata = predictors, ydata = responses$Pielou, r = c(0.1, 0.2, 0.5, 0.7, 0.9)) 
+# rfselRen0 = rf.modelSel(xdata = predictors, ydata = responses$renyi0, r = c(0.1, 0.2, 0.5, 0.7, 0.9)) 
+# rfselRen.5 = rf.modelSel(xdata = predictors, ydata = responses$renyi.5, r = c(0.1, 0.2, 0.5, 0.7, 0.9)) 
+# rfselRen1 = rf.modelSel(xdata = predictors, ydata = responses$renyi1, r = c(0.1, 0.2, 0.5, 0.7, 0.9)) 
+# rfselRen2 = rf.modelSel(xdata = predictors, ydata = responses$renyi2, r = c(0.1, 0.2, 0.5, 0.7, 0.9)) 
+# rfselRen4 = rf.modelSel(xdata = predictors, ydata = responses$renyi4, r = c(0.1, 0.2, 0.5, 0.7, 0.9)) 
+# rfselRen16 = rf.modelSel(xdata = predictors, ydata = responses$renyi16, r = c(0.1, 0.2, 0.5, 0.7, 0.9)) 
+# rfselRen64 = rf.modelSel(xdata = predictors, ydata = responses$renyi64, r = c(0.1, 0.2, 0.5, 0.7, 0.9)) 
+# rfselHill0 = rf.modelSel(xdata = predictors, ydata = responses$hill0, r = c(0.1, 0.2, 0.5, 0.7, 0.9)) 
+# rfselHill.5 = rf.modelSel(xdata = predictors, ydata = responses$hill.5, r = c(0.1, 0.2, 0.5, 0.7, 0.9)) 
+# rfselHill1 = rf.modelSel(xdata = predictors, ydata = responses$hill1, r = c(0.1, 0.2, 0.5, 0.7, 0.9)) 
+# rfselHill2 = rf.modelSel(xdata = predictors, ydata = responses$hill2, r = c(0.1, 0.2, 0.5, 0.7, 0.9)) 
+# rfselHill4 = rf.modelSel(xdata = predictors, ydata = responses$hill4, r = c(0.1, 0.2, 0.5, 0.7, 0.9)) 
+# rfselHill16 = rf.modelSel(xdata = predictors, ydata = responses$hill16, r = c(0.1, 0.2, 0.5, 0.7, 0.9)) 
+# rfselHill64 = rf.modelSel(xdata = predictors, ydata = responses$hill64, r = c(0.1, 0.2, 0.5, 0.7, 0.9)) 
+
+RFsel_All_SR = rf.modelSel(xdata = Preds_All, ydata = Resps_All$r.SpecRich, r = c(0.1, 0.2, 0.5, 0.7, 0.9)) 
+RFsel_NoBands_SR = rf.modelSel(xdata = Preds_NoBands, ydata = Resps_All$r.SpecRich, r = c(0.1, 0.2, 0.5, 0.7, 0.9)) 
+RFsel_NoCliMn_SR = rf.modelSel(xdata = Preds_NoCliMn, ydata = Resps_All$r.SpecRich, r = c(0.1, 0.2, 0.5, 0.7, 0.9)) 
+RFsel_NoCliMn_NoBands_SR = rf.modelSel(xdata = Preds_NoCliMn_NoBands, ydata = Resps_All$r.SpecRich, r = c(0.1, 0.2, 0.5, 0.7, 0.9)) 
+```
+
+Assess outputs from species richness model
+```{r}
+# plot(RFsel_All_SR)
+# plot(RFsel_NoBands_SR)
+# plot(RFsel_NoCliMn_SR)
+# plot(RFsel_NoCliMn_NoBands_SR)
+
+# Function to process the rf.modelSel() objects
+Process_ModelSel = function(rfsel){
+    rfsel <- cbind(rownames(rfsel$sel.importance), rfsel$sel.importance)
+    rownames(rfsel) <- NULL
+    colnames(rfsel) <- c("name", "imp")
+    return(rfsel)}
+
+RFsel_ALL_SR_ready = Process_ModelSel(RFsel_All_SR)
+RFsel_NoBands_SR_ready = Process_ModelSel(RFsel_NoBands_SR)
+RFsel_NoCliMn_SR_ready = Process_ModelSel(RFsel_NoCliMn_SR)
+RFsel_NoCliMn_NoBands_SR_ready = Process_ModelSel(RFsel_NoCliMn_NoBands_SR)
+
+###########################################################
+######## Convert these to more succinct functions #########
+
+# Order the dataframe by variable importance
+RFsel_ALL_SR_ready <- RFsel_ALL_SR_ready[order(-RFsel_ALL_SR_ready$imp),]
+RFsel_NoBands_SR_ready <- RFsel_NoBands_SR_ready[order(-RFsel_NoBands_SR_ready$imp),]
+RFsel_NoCliMn_SR_ready <- RFsel_NoCliMn_SR_ready[order(-RFsel_NoCliMn_SR_ready$imp),]
+RFsel_NoCliMn_NoBands_SR_ready <- RFsel_NoCliMn_NoBands_SR_ready[order(-RFsel_NoCliMn_NoBands_SR_ready$imp),]
+
+# Get list of names of top 30 predictors for each model
+RFsel_ALL_SR_names <- RFsel_ALL_SR_ready$name[1:nrow(RFsel_ALL_SR_ready)]
+RFsel_NoBands_SR_names <- RFsel_NoBands_SR_ready$name[1:nrow(RFsel_NoBands_SR_ready)]
+RFsel_NoCliMn_SR_names <- RFsel_NoCliMn_SR_ready$name[1:nrow(RFsel_NoCliMn_SR_ready)]
+RFsel_NoCliMn_NoBands_SR_names <- RFsel_NoCliMn_NoBands_SR_ready$name[1:nrow(RFsel_NoCliMn_NoBands_SR_ready)]
+
+# drop columns that are not as important based on rfmodelsel--columns not in list of names
+RFsel_ALL_SR_cov <- Preds_All[,as.character(RFsel_ALL_SR_names)] #[-c(4,5,6,9,8,7)]]
+RFsel_NoBands_SR_cov <- Preds_NoBands[,as.character(RFsel_NoBands_SR_names)]
+RFsel_NoCliMn_SR_cov <- Preds_NoCliMn[,as.character(RFsel_NoCliMn_SR_names)]
+RFsel_NoCliMn_NoBands_SR_cov <- Preds_NoCliMn_NoBands[,as.character(RFsel_NoCliMn_NoBands_SR_names)]
+
+#Too many GD object--get rid of some
+remove(RFsel_ALL_SR_ready,RFsel_NoBands_SR_ready,RFsel_NoCliMn_NoBands_SR_ready,RFsel_NoCliMn_SR_ready,Predictors_all,Predictors_noBands,Predictors_noCliMn,Predictors_noCliMn_noBands,BuildModelTable,Process_ModelSel,subset_preds,subset_resp)
+```
+
+Assess correlation between model predictors
+```{r}
+################################################################################
+########### Figure out better way to eliminate correlated variables ############
+
+# calculate correlation coefficient matrix
+# Figure out how to include landform
+cor_All <-cor(RFsel_ALL_SR_cov%>%select(-p.landform_v), method="pearson")
+cor_NoBands <-cor(RFsel_NoBands_SR_cov, method="pearson")
+cor_NoCliMn <-cor(RFsel_NoCliMn_SR_cov%>%select(-p.landform_v), method="pearson")
+cor_NoCliMn_NoBands <-cor(RFsel_NoCliMn_NoBands_SR_cov%>%select(-p.landform_v), method="pearson")
+
+# plot the correlation. the darker the number, the more correlated the two
+# variables
+corrplot(cor_All,method="number")
+corrplot(cor_NoBands,method="number")
+corrplot(cor_NoCliMn,method="number")
+corrplot(cor_NoCliMn_NoBands,method="number")
+
+rastercolumns_full <- predictors[,as.character(raster_cov_names)]
+rastercolumns_6var <- predictors[,as.character(raster_cov_names)[-c(7:14)]]
+rastercolumns_7var <- predictors[,as.character(raster_cov_names)[-c(7,8,9,11,12,13,14)]]
+
+rfselFull$selvars
+## You can now manually remove any variables that are above your correlation 
+## threshold. In this case we will just leave them all in, but we could remove
+## them by using the following code
+
+###### Model fitting
+ALL_SR_model <- cbind(RFsel_ALL_SR_cov, specN= Resps_All$r.SpecRich)
+NoBands_SR_model <- cbind(RFsel_NoBands_SR_cov, specN= Resps_All$r.SpecRich)
+NoCliMn_SR_model <- cbind(RFsel_NoCliMn_SR_cov, specN= Resps_All$r.SpecRich)
+NoCliMn_NoBands_model <- cbind(RFsel_NoCliMn_NoBands_SR_cov, specN= Resps_All$r.SpecRich)
+
+# Now let's restrict our final predictors to those that are most important (Change manually) 
+# and run the continuous model
+```
+
+Run random forest models
+```{r}
+ALL_rf_model = randomForest(specN ~ ., data=ALL_SR_model, importance = TRUE, ntree = 3000, mtry = 2)
+NoBands_rf_model = randomForest(specN ~ ., data=NoBands_SR_model, importance = TRUE, ntree = 3000, mtry = 2)
+NoCliMn_rf_model = randomForest(specN ~ ., data=NoCliMn_SR_model, importance = TRUE, ntree = 3000, mtry = 2)
+NoCliMn_NoBands_rf_model = randomForest(specN ~ ., data=NoCliMn_NoBands_model, importance = TRUE, ntree = 3000, mtry = 2)
+
+# Use the strongest model going forward
+NoBands_rf_model # 46.05% variance explained!!!
+
+############# Evaluate this code ###################
+####################################################
+NoBands_rf_model$rsq #Pseudo r-squared of .459
+plot(NoBands_rf_model$rsq)
+varImpPlot(NoBands_rf_model[[1]])
+imp_test[[1]]
+```
+
+Plot the predicted data vs. the observed data
+```{r}
+# Round for later plotting
+NoBands_rf_modelEx <- round(NoBands_rf_model$rsq[3000], digits = 4)
+
+NoBands_predicted <- NoBands_rf_model$predicted
+
+# plot observed values on the x-axis and predicted values on the y-axis. we are
+# looking for these to be correlated (so close to a 1:1 line)
+# Plot as Alpha ggplot
+NoBands_assess <- bind_cols(predict = NoBands_predicted, response = Resps_All$r.SpecRich)
+
+varNoBands <- text_grob(paste("Variance explained =", as.character(NoBands_rf_modelEx[1:4]), sep = "\n"), x = .2, y = .9)
+
+gg_NoBands <- ggplot(NoBands_assess, aes(x=response, y = predict)) +
+  geom_point(alpha=.2, color = 'blue') +
+  geom_smooth(method='lm',formula=y~x, color = 'red') +
+  labs(x = "Observed diversity", y = "Predicted diversity",title="28 variables, 1000 trees") +
+  annotation_custom(varNoBands) +
+  theme_few()
+gg_NoBands
+
+# calculate r-squared and RMSE
+actual = NoBands_assess$response
+predicted = NoBands_assess$predict
+R2 <- 1 - (sum((actual-predicted)^2)/sum((actual-mean(actual))^2))
+library(caret)
+rmse <- RMSE(NoBands_assess$predict,NoBands_assess$response)
+
+# model_comp <- egg::ggarrange(gg1000var,gg3000var,gg5000var, nrow = 1)
+# annotate_figure(model_comp, top = text_grob("Comparing models with 6 and 14 variables", face = 'bold', size = 18))
+```
+
+Evaluate Error
+```{r}
+# Calculate RMSE for the models
+error6 <- predicted6 - response
+error7 <- predicted7 - response
+errorFull <- predictedFull - response
+
+sqError6 <- error6^2
+sqError7 <- error7^2
+sqErrorFull <- errorFull^2
+
+rmse <- function(error)
+{
+  sqrt(mean(error^2))
+}
+
+RMSE6 <- rmse(error6)
+RMSE7 <- rmse(error7)
+RMSEfull <- rmse(errorFull)
+
+AIM_error6 <- bind_cols(error6 = error6,sqError6 = sqError6)
+AIM_error7 <- bind_cols(error7 = error7,sqError7 = sqError7)
+AIM_errorFull <- bind_cols(errorFull = errorFull,sqErrorFull = sqErrorFull)
+AIM_error <- AIM_model %>%
+  dplyr::select(1:2,32) %>%
+  bind_cols(AIM_error6) %>%
+  bind_cols(AIM_error7) %>%
+  bind_cols(AIM_errorFull)
+
+class(AIM_error)
+View(AIM_error)
+AIM_error_spatial <- st_sf(AIM_error)
+HighError <- AIM_error_spatial %>%
+  filter(errorFull >= 12 | errorFull <= -12) 
+# 690 entries
+RandomSample <- AIM_error[sample(1:nrow(AIM_error), nrow(HighError),
+   replace=FALSE),]
+RandomSampleSpat <-st_sf(RandomSample)
+
+# Plot KDEs for each
+highSP <- as(HighError, "Spatial")
+highKDE <- sp.kde(testSP,n = 5000, bw = .4)
+plot(highKDE)
+
+writeRaster(highKDE,filename = 'data/Tiffs/highErrorKDE.tif', format = "GTiff")
+st_write(HighError, 'data/Working/HighError.shp')
+
+randomSP <- as(RandomSampleSpat, "Spatial")
+randomKDE <- sp.kde(randomSP,n = 5000, bw = .4)
+plot(randomKDE)
+
+writeRaster(randomKDE,  filename = 'data/Tiffs/randomSampleKDE.tif', format = "GTiff")
+st_write(RandomSample, 'data/Working/RandomSample.shp')
+
+mapview(HighError,cex = 3, zcol = 'errorFull')
+
+mapview(RandomSampleSpat,cex = 3, zcol = 'errorFull')
+```
+
+
+
+### Load GEE 2017 data for predictive mapping
+```{r}
+ndvi2017<- raster('data/Tiffs/GEE2017/ndvi2017.tif')
+nbr2017 <- raster('data/Tiffs/GEE2017/nbr2017.tif')
+tcb2017 <- raster('data/Tiffs/GEE2017/tcb2017.tif')
+tcg2017 <- raster('data/Tiffs/GEE2017/tcg2017.tif')
+tcw2017 <- raster('data/Tiffs/GEE2017/tcw2017.tif')
+plot(ndvi2017)
+plot(nbr2017)
+plot(tcb2017)
+plot(tcg2017)
+plot(tcw2017)
+
+# Import independent validation data
+AIM_covariates <- read_sf('data/PlotsShapefiles/AIM_validate.shp') %>%
+  st_transform(crs = 4326)
+View(AIM_covariates)
+
+
+testPredict <- predict(rf_fit1000)
+### Reports accuracy, Cohen's kappa and area under ROC curve
+testAssessPred <- accuracy(x = rf_fit1000, resp)
+```
+
+```{r}
+# Import shapefile to clip
+GBsubset <- read_sf('data/Shapefiles/ProjectSubset.shp') %>%
+  st_transform(crs = 4326)
+
+# Rasters needed to predict
+tcb <- raster('data/Tiffs/GEE2017/tcb2017.tif')
+tcg <- raster('data/Tiffs/GEE2017/tcg2017.tif')
+cli_ffp <- raster('data/Tiffs/Cli/climate_ffp.tif')
+trasp <- raster('data/Tiffs/Phys/GBtrasp.tif')
+soil_h20 <- raster('data/Tiffs/Soil/SoilWaterMosaic.tif')
+
+# Clip rasters to GB bounds
+tcb_clip <- crop(tcb, GBsubset)
+tcg_clip <- crop(tcg, GBsubset)
+cli_ffp_clip <- crop(cli_ffp, GBsubset)
+trasp_clip <- crop(trasp, GBsubset)
+soil_h20_clip <- crop(soil_h20, GBsubset)
+plot(tcb_clip)
+plot(tcg_clip)
+plot(cli_ffp_clip)
+plot(trasp_clip)
+plot(soil_h20_clip)
+
+trasp_clip$extent
+tcb_clip
+tcg_clip
+cli_ffp_clip
+soil_h20_clip
+
+mapview(GBsubset)
+
+extent_proj = st_transform(extent,crs = 4326)
+mapview(extent)
+
+tcb_proj <- projectRaster(tcb_clip, crs="+proj=longlat +datum=WGS84")
+tcg_proj <- projectRaster(tcg_clip, crs="+proj=longlat +datum=WGS84")
+cli_ffp_proj <- projectRaster(cli_ffp_clip, crs="+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")
+trasp_proj <- projectRaster(trasp_clip, crs="+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")
+soil_h20_proj <- projectRaster(soil_h20_clip, crs="+proj=longlat +datum=WGS84")
+
+stack_5band=stack(tcb_clip, tcg_clip, cli_ffp_clip, clip, clip)
+
+latitude
+
+```

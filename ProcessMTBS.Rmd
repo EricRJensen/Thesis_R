@@ -1,0 +1,208 @@
+---
+title: "Prep_MTBS_for_GEE"
+author: "Eric Jensen"
+date: "March 6, 2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(raster)
+library(sf)
+library(tidyverse)
+library(lubridate)
+```
+
+Files that I want to keep are:  
+- Prefire landsat image (possibly processed to keep only NIR and SWIR images)
+- Postfire landsat image (possibly processed to keep only NIR and SWIR images)
+- dNBR
+- rdNBR
+- Metadata file
+Note: Need to somehow attach the year of the fire to the image
+
+Delete files with phrases:
+- burn_bndy
+- gapmask
+- mask
+- desc
+- map
+- rep
+- .kmz
+
+Unzip files in directory
+```{r}
+# Set fire ids as file_str and setwd
+wd <- "C:/Users/erjensen/Desktop/MTBS_AllData/"
+annual_folders <- list.files(wd, full.names = T)
+setwd(wd)
+```
+
+Produce function to keep only the dnbr and rdnbr images for all folders 1985-2017♫
+```{r}
+#Nested functions to retrieve only dnbr and rdnbr images
+keep_dnbr_all <- function(year_folder){
+  keep_dnbr <- function(Path){
+    
+    print(Path)
+    print(list.files(Path))
+
+    # Create list of files to delete
+    files_to_delete <- list.files(path = Path, pattern =  'gapmask|mask|desc|map|rep|.kmz|refl|dnbr6|nbr5', full.names = T,recursive = T)
+    print(files_to_delete)
+  
+    #delete files
+    file.remove(files_to_delete)  }
+
+  # Map the keep_dnbr function across all of the annual fire subfolders
+  map(year_folder, keep_dnbr) }
+
+map(annual_folders, keep_dnbr_all)
+```
+
+
+Get dnbr, rdnbr, and shapefiles and put them in separate folders
+```{r}
+#load package for moving files
+library(filesstrings)
+
+#create folders for outputs
+# Function to grab and move RdNBR, dNBR, shapefiles, and metadata files to their own folders
+
+move_sev_files = function(year_folder){
+  dir.create(paste(year_folder, "/dNBR", sep=""))
+  dir.create(paste(year_folder, "/RdNBR", sep=""))
+  dir.create(paste(year_folder, "/shapefiles", sep=""))
+  dir.create(paste(year_folder, "/metadata", sep=""))
+
+  #Grab and move dnbr files
+  dnbr_files <- list.files(path = year_folder, pattern = '_dnbr', recursive = TRUE, full.names = T)
+  file.move(files = dnbr_files,destinations = paste(year_folder, "/dnbr", sep=""))
+
+  #Grab and move rdnbr files
+  rdnbr_files <- list.files(path = year_folder, pattern = '_rdnbr', recursive = TRUE, full.names = T)
+  file.move(files = rdnbr_files,destinations = paste(year_folder, "/rdnbr", sep=""))
+
+  #Grab and move shapefiles
+  shapefiles <- list.files(path = year_folder, pattern = 'burn_bndy', recursive = TRUE, full.names = T)
+  file.move(files = shapefiles,destinations = paste(year_folder, "/shapefiles", sep=""))
+  
+  #Grab and move metadata files
+  metadata_files <- list.files(path = year_folder, pattern = 'metadata', recursive = TRUE, full.names = T)
+  file.move(files = metadata_files,destinations = paste(year_folder, "/metadata", sep=""))
+
+  # Delete all folders except dnbr and rdnbr folders
+  remaining_folders <- list.files(path = year_folder, pattern = 'nv|az|ut|or|id|ca', full.names = T)
+  unlink(remaining_folders,recursive=T)
+}
+
+#test the function
+all_data <- "C:/Users/erjensen/Desktop/MTBS_AllData"
+annual_folders <- list.files(all_data, full.names = T)
+map(annual_folders, move_sev_files)
+```
+
+Clear the environment of variables
+```{r}
+rm(list = ls())
+```
+
+
+Because the fire severity data are extended out to the full extent of the image, rather than masked at the fire boundary, this function masks each fire's dNBR and RdNBR file by the corresponding shapefile with which is was packaged.
+```{r}
+annual_lists <- list.files("C:/Users/erjensen/Desktop/MTBS_AllData/", full.names = T)
+
+# nested function to mask each RdNBR and dNBR raster by the boundary of the fire and then export as a new tiff
+annual_fires <- function(year_folder){
+    
+    # Get list of fire ids for entire year to filter dnbr, rdnbr, and shapefiles by
+    fire_list <- list.files(paste(year_folder,'/metadata', sep=''))
+    print(fire_list)
+    fire_ids <- fire_list %>%
+                    map(substr, start = 1, stop = 21) %>%
+                    unlist() %>%
+                    map(str_to_lower) %>%
+                    unlist()
+    
+    # Get list of dnbr, rdnbr, and shapefiles
+    dnbr_list <- list.files(paste(year_folder, '/dNBR', sep= ''), pattern = '.tif', full.names = T)
+    rdnbr_list <- list.files(paste(year_folder, '/RdNBR', sep = ''), pattern = '.tif', full.names = T)
+    shp_list <- list.files(paste(year_folder, '/shapefiles', sep = ''), pattern = '.shp', full.names = T)
+    
+    # Create new directories to store clipped rasters once written
+    dir.create(paste(year_folder, "/dNBR_masked", sep=""))
+    dir.create(paste(year_folder, "/RdNBR_masked", sep=""))
+    
+    mask_fires <- function(fire_id){
+
+        # Subset lists of files by the fire id
+        dnbr_file <- str_subset(dnbr_list,fire_id)
+        print(dnbr_file)
+        #print(length(dnbr_file))
+        rdnbr_file <- str_subset(rdnbr_list,fire_id)
+        #print(length(rdnbr_file))
+        shp_file <- str_subset(shp_list,fire_id)
+        #print(length(shp_file))
+    
+        # If statement to skip if there are not dnbr files
+        if(length(dnbr_file) != 0){
+        
+          # import spatial files for masking as raster and sf
+          shp_sf <- st_read(shp_file, quiet=T)
+          dnbr_rast <- raster(dnbr_file)
+          rdnbr_rast <- raster(rdnbr_file)
+          
+          # Mask the dnbr and rdnbr files by the sf object
+          dnbr_masked <- mask(dnbr_rast, shp_sf)
+          rdnbr_masked <- mask(rdnbr_rast, shp_sf)
+      
+          # Write new dnbr and rdnbr rasters to the appropriate folder with an appropriate name
+          writeRaster(dnbr_masked, paste(year_folder, '/dNBR_masked/', substr(dnbr_file,50,89), 'dnbrmasked.tif', sep = ''), overwrite = T)
+          writeRaster(rdnbr_masked, paste(year_folder, '/rdNBR_masked/', substr(dnbr_file,50,89), 'rdnbrmasked.tif', sep = ''), overwrite = T) 
+          }
+        else {}
+      }
+    map(fire_ids, mask_fires)
+    }
+
+# Apply nested function to entire folder stack
+map(annual_lists, annual_fires)
+```
+
+
+Import and mosaic masked rasters for each year
+```{r}
+# list of annual folder paths
+annual_lists <- list.files("C:/Users/erjensen/Desktop/MTBS_AllData/", full.names = T)
+
+# Function to produce annual mosaics
+annual_mosaics <- function(year_folder){
+  
+    # Get year string for parsing output filename
+    year <- substr(year_folder, start = 40, stop = 43)
+    print(year)
+
+    # Get filelists for masked dnbr and rasters
+    dnbr_list <- list.files(paste(year_folder, '/dNBR_masked', sep= ''), pattern = 'dnbrmasked.tif$', full.names = T)
+    print(dnbr_list)
+    rdnbr_list <- list.files(paste(year_folder, '/RdNBR_masked', sep = ''), pattern = 'rdnbrmasked.tif$', full.names = T)
+    print(rdnbr_list)
+    
+    # Import masked dnbr and rdnbr rasters
+    dnbr_rasters <- map(dnbr_list,raster)
+    rdnbr_rasters <- map(rdnbr_list,raster)
+    
+    # Mosaic dnbr and rdnbr files
+    dnbr_rasters$fun <- mean # set function
+    dnbr_mosaic <- do.call(mosaic, dnbr_rasters)
+    rdnbr_rasters$fun <- mean # set function
+    rdnbr_mosaic <- do.call(mosaic, rdnbr_rasters)
+    
+    # Write the raster mosaics to be imported into GEE
+    writeRaster(dnbr_mosaic, filename = paste(year_folder, '/dNBRmosaic', year, '.tif', sep = ''))
+      print(paste(year_folder, '/dNBRmosaic', year, '.tif', sep = ''))
+    writeRaster(rdnbr_mosaic, filename = paste(year_folder, '/RdNBRmosaic', year, '.tif', sep = ''))  
+      print(paste(year_folder, '/RdNBRmosaic', year, '.tif', sep = ''))
+                }
+
+map(annual_lists, annual_mosaics)
+```
