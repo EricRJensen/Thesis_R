@@ -1,0 +1,71 @@
+---
+title: "Spectral Diversity"
+author: "Eric Jensen"
+date: "April 21, 2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(stringr)
+library(vegan)
+```
+
+### Import spectral diversity tables
+**Input datasets:**  
+- Tasseled cap histograms  
+- Normalized histograms
+- Spectral diversity histograms
+- Index standard deviations
+
+```{r}
+# Read in normalized histograms
+norm_hists_all <- read_csv('data/DiversityTables/NormHists_flat.csv') %>% drop_na()
+
+norm_hists <- norm_hists_all %>%
+  select(contains('Histogram'))
+  
+all_hist_df = as_tibble(norm_hists_all$PrimaryKey)
+
+for(i in 1:ncol(norm_hists)){
+    col_name <- str_sub(colnames(norm_hists)[i], end = -10)
+    print(col_name)
+    
+    hist_df <- tibble()
+    
+      for(j in 1:nrow(norm_hists)){
+            # Process character string into simple histograms
+            print(j)
+            norm <- as.character(norm_hists[j,i])
+            hist_melt <- strsplit(norm, ',')
+            hist_tbl <- as_tibble(matrix(unlist(hist_melt), nrow = (length(hist_melt[[1]])) / 2, byrow=T))
+            count_clean <- as_tibble(sub("\\]", "", hist_tbl$V2))
+            count_clean <- as_tibble(as.numeric(sub("\\]", "", count_clean$value)))
+            count_distinct <- filter(count_clean, value != 0)
+            count_list <- unlist(count_distinct)
+            count_list <- unname(count_list)
+
+            # Derive richness and shannons from histograms
+            Rich <- as.numeric(length(count_list))
+            ShanH <- diversity(count_list)
+
+            div_df <- cbind(Rich, ShanH)
+
+            hist_df <- rbind(hist_df, div_df) }
+    
+    hist_df <- hist_df %>%
+                setNames(paste0(col_name, names(.)))
+    
+    all_hist_df = cbind(all_hist_df, hist_df) }
+
+```
+
+### Calculate spectral diversity
+- Counts of class richness
+- Shannon diversity index
+
+```{r}
+
+```
+
+### Visualize the data with ggplot
