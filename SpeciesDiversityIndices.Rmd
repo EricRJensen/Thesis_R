@@ -10,17 +10,36 @@ library(tidyverse)
 library(reshape)
 library(reshape2)
 library(sf)
+library(BiodiversityR)
+library(rlang)
 ```
 
 # Read in LPI CSVs as tibbles
 ```{r}
 options(scipen=999)
+
+# Read in AIM database data
 LPI_detail <- read_csv('data/CSVs/Full_LPIDetailTable.csv') %>%
-  select(-OBJECTID)
-LPI_header <- read_csv('data/CSVs/Full_LPIHeaderTable.csv')
+  dplyr::select(-OBJECTID)
+
+# Read in 2019 summer field data
 Jensen_LPI_header <- read_csv('data/CSVs/Jensen_tblLPIHeader.csv')
 #Jensen_LPI_detail <- read_csv('data/CSVs/Jensen_tblLPIDetail.csv') #-- This dataframe is needed for the below code chunk
 Jensen_LPI_detail <- read_csv('data/CSVs/Jensen_tblLPIDetail_wPlotKey.csv')
+
+# Spatially subset plots to Great Basin based on keys in LPI_detail that spatially subset to great basin
+GBbounds <- read_sf('data/Shapefiles/ProjectBounds.shp') %>%
+  st_transform(crs = 2163)
+AIMfull <- read_sf('data/Shapefiles/AIM_tblPlots.shp') %>%
+  st_transform(crs = 2163)
+
+AIMfull_keys = dplyr::select(AIMfull, PrimaryKey)
+
+AIMgb_keys <- AIMfull_keys[GBbounds,] #Spatially subset keys to Great Basin
+
+LPI_detail_GB = subset(LPI_detail, PrimaryKey %in% AIMgb_keys$PrimaryKey) #Keep only rows that match Great Basin keys
+# LPI_detail_GB will be the dataframe that I will use going forward
+remove(GBbounds,AIMfull,LPI_detail, AIMgb_keys, AIMfull_keys)
 ```
 
 ### Need to get PlotKeys for the Jensen_LPI_detail data to assign as primary keys (as done previously in WithholdMergeAIM script)
@@ -66,13 +85,13 @@ Jensen_LPI_detail <- Jensen_LPI_detail %>%
   mutate(PrimaryKey = as.character(PrimaryKey)) %>%
   mutate(Source = "FieldSeason2019") # Data source column
 
-LPI_detail <- mutate(LPI_detail, Source = "AIMDataset") # Data source column
+LPI_detail_GB <- mutate(LPI_detail_GB, Source = "AIMDataset") # Data source column
 # View(LPI_detail)
 # Bind rows to produce dataframe of all observations
 # Soil surface hits are not included because if a species is a basal hit then it will also be included in the point as an upper point hit.
 LPI_combined <- Jensen_LPI_detail %>%
-  bind_rows(LPI_detail) %>% 
-  select(PointNbr,TopCanopy,Lower1,Lower2,Lower3,Lower4,Lower5,Lower6,Lower7,LineKey,PrimaryKey,Source)
+  bind_rows(LPI_detail_GB) %>% 
+  dplyr::select(PointNbr,TopCanopy,Lower1,Lower2,Lower3,Lower4,Lower5,Lower6,Lower7,LineKey,PrimaryKey,Source)
 #View(LPI_combined)
 ```
 
@@ -86,7 +105,7 @@ MeltLPI = melt(LPI_combined, id = c('PointNbr','LineKey','PrimaryKey','Source'))
 
 # Assess the outcome
 noNone_strings = MeltLPI %>%
-  select(value) %>%
+  dplyr::select(value) %>%
   filter(value != 'None') %>%
   group_by(value) %>%
   mutate('count' = n()) %>%
@@ -95,7 +114,7 @@ noNone_strings = MeltLPI %>%
 
 MeltLPI_woNone = filter(MeltLPI, value != 'None') 
 #View(MeltLPI_woNone)
-remove(MeltLPI,noNone_strings)
+remove(MeltLPI,noNone_strings, LPI_combined)
 ```
 
 #### Assess codes of 3 characters or fewer
@@ -105,7 +124,7 @@ remove(MeltLPI,noNone_strings)
 # Filter by number of characters and the count for each
 # Need to remove non-species hits somehow
 short_strings = MeltLPI_woNone %>%
-  select(value) %>%
+  dplyr::select(value) %>%
   filter(!nchar(value) >3) %>%
   group_by(value) %>%
   mutate('count' = n()) %>%
@@ -130,7 +149,7 @@ unk_codes = c('^AF0','^AF1','^AF2','^AF3','^AF4','^AF5','^AF6','^AF7','^AF8','^A
               '^AAFF','^AFAF','^AAGG','^AGAG','^PPFF','^PFPF','^PPGG','^PGPG','^SHSH', '^PPSH', '^PPGG')
 
 unk_strings = MeltLPI_woShort %>%
-  select(value) %>%
+  dplyr::select(value) %>%
   filter(grepl(paste(unk_codes,collapse='|'),value)) %>%
   group_by(value) %>%
   mutate('count' = n()) %>%
@@ -140,7 +159,7 @@ unk_strings = MeltLPI_woShort %>%
 # Compare number of unknowns with total observations in the datebase
 ## Sum the total number of points in the database
 total_obs = MeltLPI_woShort %>%
-  select(value) %>%
+  dplyr::select(value) %>%
   group_by(value) %>%
   mutate('count' = n()) %>%
   distinct()
@@ -158,7 +177,7 @@ remove(total_obs,unk_strings,unk_codes,MeltLPI_woShort,sum_unk, sum_total,Jensen
 ```
 #### Note: Data are now cleaned enough to work directly with the species data as observations and to join and compare them with the PLANTS database
 
-### Assess remaining observations in the context of the USDA PLANTS database
+### Assess remaining observations in the context of the USDA PLANTS database--CAN SKIP THIS FOR PRODUCING INDICES!!
 #### Join LPI codes to USDA PLANTS codes
 ```{r}
 # Read in USDA plants dataframe to get genus and species data
@@ -180,7 +199,6 @@ lpi_plants_join = MeltLPI_ready %>%
   dplyr::rename(Symbol = value) %>%
   group_by(Symbol) %>%
   mutate('count' = n()) %>%
-  distinct() %>%
   left_join(plantsList, 'Symbol') 
 #View(lpi_plants_join)
 
@@ -224,7 +242,8 @@ lpi_still_na = lpi_plants_unjoined %>%
   select(Symbol, count) %>%
   left_join(plantsList_wSyn, c('Symbol' = 'SynSym')) %>%
   filter(is.na(LatinName))
-View(lpi_still_na)
+#View(lpi_still_na)
+remove(lpi_plants_unjoined, lpi_plants_unjoined_joined)
 # Have reduced the number of unknown species significantly! Need to figure out how to treat these though
 ```
 
@@ -233,7 +252,7 @@ View(lpi_still_na)
 ### Need to figure out data back-up system--be an adult. https://www.crashplan.com/en-us/pricing/ #######
 #########################################################################################################
 
-### Apply the USDA PLANTS joins to the full dataset of plants
+### Apply the USDA PLANTS joins to the full dataset of plants--RESUME CALCULATIONS HERE!!
 ```{r}
 # Read in USDA plants dataframe to get genus and species data
 # I combined the complete USDA PLANTS list with the Nevada, Oregon, Idaho, Utah, and California PLANTS list to create the below list
@@ -242,7 +261,7 @@ plantsList <- read_csv('data/TXT/Combined_PlantsTable_wAdditions.txt') %>%
   dplyr::rename('LatinName' = 'Scientific Name with Author') %>%
   dplyr::rename('CommonName' = 'Common Name') %>%
   distinct()
-View(plantsList)
+#View(plantsList)
 
 # Remove rows of plants list with synonym symbols and keep only those with NA
 plantsList = filter(plantsList,is.na(SynSym)) 
@@ -252,7 +271,7 @@ plantsList = filter(plantsList,is.na(SynSym))
 lpi_USDA_full_join = MeltLPI_ready %>%
   dplyr::rename(Symbol = value) %>%
   left_join(plantsList, 'Symbol') 
-View(lpi_USDA_full_join)
+#View(lpi_USDA_full_join)
 
 # Create dataframe of joined species
 lpi_USDA_full_joined = filter(lpi_USDA_full_join, !is.na(LatinName))
@@ -264,8 +283,8 @@ lpi_USDA_full_joined = filter(lpi_USDA_full_join, !is.na(LatinName))
 # Filter down to those rows that were not joined previously
 lpi_USDA_full_unjoined = lpi_USDA_full_join %>%
   filter(is.na(LatinName)) %>%
-  select(-c(SynSym, LatinName,CommonName,Family))
-View(lpi_USDA_full_unjoined)
+  dplyr::select(-c(SynSym, LatinName,CommonName,Family))
+#View(lpi_USDA_full_unjoined)
 
 # Reimport PLANTS database and keep the Species Synonyms
 plantsList_wSyn <- read_csv('data/TXT/Combined_PlantsTable_wAdditions.txt') %>%
@@ -273,32 +292,153 @@ plantsList_wSyn <- read_csv('data/TXT/Combined_PlantsTable_wAdditions.txt') %>%
   dplyr::rename('LatinName' = 'Scientific Name with Author') %>%
   dplyr::rename('CommonName' = 'Common Name') %>%
   distinct()
-View(plantsList_wSyn)
+#View(plantsList_wSyn)
 
 # Join the unjoined LPI observations to the Synonym Symbols
 lpi_USDA_full_unjoined_joined = lpi_USDA_full_unjoined %>%
   left_join(plantsList_wSyn, c('Symbol' = 'SynSym')) %>%
   filter(!is.na(LatinName)) %>%
   dplyr::rename('SynSym' = 'Symbol.y') %>%
-  select(-Family) %>%
-  mutate("Family" = NA) %>% #remove family because of issues with duplication, can add later
-  distinct()
-View(lpi_USDA_full_unjoined_joined)
-View(lpi_USDA_full_joined)
+  dplyr::select(-Family) %>%
+  mutate("Family" = NA)  #remove family because of issues with duplication, can add later
+#View(lpi_USDA_full_unjoined_joined)
+#View(lpi_USDA_full_joined)
 
 # Bind joined rows from "SynSym" to the above rows joined to "Symbol"
-lpi_plants_bind <- rbind(lpi_USDA_full_joined, lpi_USDA_full_unjoined_joined)
-View(lpi_plants_bind)
+LPI_FULLY_JOINED <- rbind(lpi_USDA_full_joined, lpi_USDA_full_unjoined_joined)
+#View(lpi_plants_bind)
 
 # Count number of unjoined rows and as a percentage of the total points that we tried to be joined
-nrow(lpi_USDA_full_unjoined)-nrow(lpi_USDA_full_unjoined_joined)
+#nrow(lpi_USDA_full_unjoined)-nrow(lpi_USDA_full_unjoined_joined)
 # 3550, not bad!
-(nrow(lpi_USDA_full_unjoined)-nrow(lpi_USDA_full_unjoined_joined)) / ((nrow(lpi_USDA_full_unjoined)-nrow(lpi_USDA_full_unjoined_joined)) + nrow(lpi_plants_bind))
+#(nrow(lpi_USDA_full_unjoined)-nrow(lpi_USDA_full_unjoined_joined)) / ((nrow(lpi_USDA_full_unjoined)-nrow(lpi_USDA_full_unjoined_joined)) + nrow(lpi_plants_bind))
 #Less than 3/10 of a percent
+remove(lpi_USDA_full_join, lpi_USDA_full_joined, lpi_USDA_full_unjoined, lpi_USDA_full_unjoined_joined, plantsList, plantsList_wSyn)
 ```
 
+---------------------------------------------------------------------------------
 ### Calculate Species Diversity Indices
 ```{r}
-#Work with the "lpi_plants_bind"" data
+#####################################################
+################ With test data #####################
+
+# Apply the LPI_FULLY_JOINED dataframe here
+
+# Notes:
+# 1) Need to deal with species only ID'd to genus!!!
+# 2) Need to incorporate Species Richness counts too!!!
+# 3) Need to account for different plotsizes--rarefaction?--different sizes but same number of points; would affect species richness more than LPI/abundance
+
+#BiodiversityR will be a useful package!!
+#Vegan package as well
+
+# data("BCI")
+# #View(BCI) # Format AIM data in this way
+# 
+# # Assess rarefaction curves, chao indices, etc.
+# 
+# BCI_shan <- diversity(BCI, index = "shannon")
+# BCI_simp <- diversity(BCI, index = "simpson")
+# BCI_invSimp <- diversity(BCI, index = "invsimpson")
 ```
+
+### Prepare data to calculate diversity 
+```{r}
+#View(LPI_FULLY_JOINED)
+
+group_cols <- c('PrimaryKey', 'Symbol')
+
+
+#View(Plots)
+
+# Create dataframe of counts in a matrix form to calculate species diversity indices by
+Species_Calcs <- LPI_FULLY_JOINED %>%
+  dplyr::select(PrimaryKey,Symbol) %>%
+  group_by(!!!syms(group_cols)) %>% # Group by both columns to get accuate counts of abundance for each plot
+  mutate('Count' = n()) %>%
+  distinct() %>%
+  spread(Symbol, Count, fill = 0)
+
+# Assess the dataframe contents
+# Species_Calcs %>%
+#   slice(1:100) %>%
+#   select(1:20) %>%
+#   View()
+```
+
+### Calculate diversity indices and join them to main dataframe
+```{r}
+# Calculate indices for each plot
+shannon <- as_tibble(diversity(Species_Calcs[,2:length(Species_Calcs)], index = "shannon"))
+simpson <- as_tibble(diversity(Species_Calcs[,2:length(Species_Calcs)], index = "simpson"))
+invsimp <- as_tibble(diversity(Species_Calcs[,2:length(Species_Calcs)], index = "invsimpson"))
+
+# Calculate Renyi and Hill Indices
+# Supporting document for vegan package: https://cran.r-project.org/web/packages/vegan/vignettes/diversity-vegan.pdf
+hill = renyi(Species_Calcs[,2:1340], scales = c(0,.5, 1, 2, 4, 16, 64), hill = TRUE) %>% 
+  dplyr::rename(hill0=`0`,hill.5=`0.5`,hill1=`1`,hill2=`2`,hill4=`4`,hill16=`16`,hill64=`64`)
+renyi = as_tibble(renyi(Species_Calcs[,2:1340], scales = c(0,.5, 1, 2, 4, 16, 64))) %>% 
+  dplyr::rename(renyi0=`0`,renyi.5=`0.5`,renyi1=`1`,renyi2=`2`,renyi4=`4`,renyi16=`16`,renyi64=`64`)
+
+# Pielou's evenness
+S <- specnumber(Species_Calcs) ## rowSums(BCI > 0) does the same...
+pielou <- shannon/log(S)
+
+# Bind columns of indices to columns of plots
+Plots <- LPI_FULLY_JOINED %>% # Produce dataframe with one column of plots to bind to
+  dplyr::select(PrimaryKey) %>%
+  distinct() 
+
+PlotsIndices <- Plots %>%
+  mutate('InvSimp' = invsimp$value) %>%
+  mutate('Shannon' = shannon$value) %>%
+  mutate('Simpson' = simpson$value) %>%
+  mutate('Pielou' = pielou$value) %>%
+  bind_cols(renyi) %>%
+  bind_cols(hill) 
+
+# Plots_wCounts <- LPI_FULLY_JOINED %>% # Produce dataframe with only Keys, Plant symbols, and counts of plants at each plot
+#   dplyr::select(PrimaryKey,Symbol) %>%
+#   group_by(!!!syms(group_cols)) %>% 
+#   mutate('Count' = n()) %>%
+#   distinct()
+# 
+# # Join the diversity indices to the plots with counts dataframe
+# Plots_wCountsIndices <- Plots_wCounts %>%
+#   inner_join(PlotsBound, by = 'PrimaryKey')
+
+View(Plots_wCountsIndices)
+```
+
+Also consider:
+Chao richness
+Inverse Berger-Parker
+Fisher's alpha
+Brillouin
+Margalef
+Q-Statistic
+Hill's evenness
+
+Get species richness
+```{r}
+#Import shapefile with species richness counts
+AIM_covariates <- sf::read_sf('data/Working/AIM_covariates_model.shp') %>%
+  dplyr::select(c(PrimaryKey,SpecRich=7))
+
+# Join to plots Indices
+AllIndices <- PlotsIndices %>%
+  left_join(AIM_covariates, 'PrimaryKey') %>%
+  dplyr::select(-geometry)%>%
+  drop_na()
+```
+
+Write species diversity indices to CSV
+```{r}
+write_csv(AllIndices, path = 'data/CSVs/ResponseVariables.csv')
+```
+
+
+
+
+
 
