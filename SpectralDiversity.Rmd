@@ -11,8 +11,8 @@ library(stringr)
 library(vegan)
 library(sf)
 library(plyr)
+library(randomForest)
 ```
-
 
 )### Import spectral diversity tables
 **Input datasets:**  
@@ -24,7 +24,7 @@ library(plyr)
 **Normalized histograms**
 ```{r}
 # Read in normalized histograms
-norm_hists_all <- read_csv('data/DiversityTables/NormHists_flat.csv') %>% drop_na()
+norm_hists_all <- read_csv('data/SpectralDiversity_CSVs/NormHists_flat.csv') %>% drop_na()
 # Select for only columns that are histograms
 norm_hists <- norm_hists_all %>%
   select(contains('Histogram'))
@@ -33,7 +33,7 @@ norm_hists <- norm_hists_all %>%
 **Unsupervised classification histograms**
 ```{r}
 # Read in unsupervised classification histograms
-unsup_hists_all <- read_csv('data/DiversityTables/RS_clust_Predictors_new.csv') %>% drop_na()
+unsup_hists_all <- read_csv('data/SpectralDiversity_CSVs/RS_clust_Predictors.csv') %>% drop_na()
 # Select for only columns that are histograms
 unsup_hists <- unsup_hists_all %>%
   select(contains('histogram'))
@@ -42,15 +42,15 @@ unsup_hists <- unsup_hists_all %>%
 **Tasseled cap histograms**
 ```{r}
 # Get file list for each of the tasseled cap indices
-tcb_files <- list.files('data/DiversityTables/', pattern = 'tcb', full.names = TRUE)
-tcg_files <- list.files('data/DiversityTables/', pattern = 'tcg', full.names = TRUE)
-tcw_files <- list.files('data/DiversityTables/', pattern = 'tcw', full.names = TRUE)
+tcb_files <- list.files('data/SpectralDiversity_CSVs/', pattern = 'tcb', full.names = TRUE)
+tcg_files <- list.files('data/SpectralDiversity_CSVs/', pattern = 'tcg', full.names = TRUE)
+tcw_files <- list.files('data/SpectralDiversity_CSVs/', pattern = 'tcw', full.names = TRUE)
 
 # Function to import and rbind the dataframes
 Import_TC <- function(tc_list){
   tc_df = tibble()
   for(i in tc_list){
-      indv_tc_df <- read.csv(i, na=c("","NA")) %>% select(c(PrimaryKey, contains('Histogram')))
+      indv_tc_df <- read_csv(i, na=c("","NA")) %>% select(c('PrimaryKey', contains('Histogram')))
       tc_df <- rbind(tc_df, indv_tc_df) }
   return(tc_df) }
 
@@ -59,14 +59,14 @@ tcb_df <- Import_TC(tcb_files)
 tcg_df <- Import_TC(tcg_files)
 tcw_df <- Import_TC(tcw_files)
 tc_hists_all <- join_all(list(tcb_df, tcg_df, tcw_df), by = 'PrimaryKey', type = 'left') %>% drop_na()
-tc_hists <- tc_hists %>% select(-PrimaryKey)
+tc_hists <- tc_hists_all %>% select(-PrimaryKey)
 remove(tcb_files,tcg_files,tcw_files,tcg_df,tcb_df,tcw_df,Import_TC)
 ```
 
 **Indices' standard deviations and coefficients of variation**
 ```{r}
 # Read in standard deviatons and coefficients of variation tables
-sd_cv_all <- read_csv('data/GEEZonalCSVs/RS_Predictors.csv') %>% drop_na()
+sd_cv_all <- read_csv('data/SpectralDiversity_CSVs/RS_Predictors.csv') %>% drop_na()
 # Clean df, mutate coefficient of variation columns, reorganize dataframe
 sd_cv_div <- sd_cv_all  %>%
   dplyr::select(-c(.geo, VisitYear)) %>%
@@ -94,7 +94,6 @@ remove(sd_cv_all)
 ### Calculate spectral diversity
 - Counts of class richness
 - Shannon diversity index
-
 ```{r}
 # ---------------------------------------------------------------
 ####################### INDICES FUNCTION ########################
@@ -203,40 +202,53 @@ tc_div <- dplyr::rename(tc_div, PrimaryKey = value)
 unsup_div <- Unsup_CalcDiversity(in_hists = unsup_hists, in_PK = unsup_hists_all)
 unsup_div <- dplyr::rename(unsup_div, PrimaryKey = value)
 
-remove(norm_hists,norm_hists_all,tc_hists,tc_hists_all, unsup_hists,unsup_hists_all,UnSup_CalcDiversity, Index_CalcDiversity)
+remove(norm_hists,norm_hists_all,tc_hists,tc_hists_all, unsup_hists,unsup_hists_all,Unsup_CalcDiversity, Index_CalcDiversity)
 ```
 
 **Import species diversity table**
 ```{r}
-spec_div <- read_csv('data/CSVs/ResponseVariables.csv') %>%
-  select(c(PrimaryKey,SpecRich))
+species_div <- read_csv('data/SpectralDiversity_CSVs/Allmodel.csv') %>%
+  select(c(PrimaryKey,SpeciesN))
 ```
 
 **Join dataframes for visualization and analysis**
+**Bring in the spectral means too and create second dataset**
 ```{r}
 # Join spectral predictors--this can be more efficient if needed
 spectral_div <- join_all(list(tc_div,norm_div,sd_cv_div,unsup_div), by = 'PrimaryKey', type = 'left')
 
 # Join species diversity to spectral diversity; drop nas, drop PrimaryKey column
-all_div <- left_join(spec_div, spectral_div, by = 'PrimaryKey') %>%
-                drop_na() %>%
-                select(-PrimaryKey)
-remove(sd_cv_div,norm_div,tc_div,unsup_div)
+all_div <- left_join(species_div, spectral_div, by = 'PrimaryKey') %>%
+                drop_na()
+
+# Join spectral means to the spectral diversity data
+spectral_mns <- read_csv('data/SpectralDiversity_CSVs/RS_Predictors.csv') %>% 
+  drop_na() %>% 
+  select(c(PrimaryKey, contains('_mn')))
+all_div_mns <- left_join(all_div, spectral_mns, by = 'PrimaryKey') %>% select(-PrimaryKey)
+
+# Remove PrimaryKey column from all_div
+all_div <- all_div %>% select(-PrimaryKey)
+
+remove(sd_cv_div,norm_div,tc_div,unsup_div, spectral_mns)
 ```
 
 ### Visualize the data
 ```{r}
-corrs = cor(all_div, method = 'pearson', use = 'pairwise.complete.obs')[1,-1]
+# Assess univariate correlations of spectral characteristics (means and diversity measures) to species richness
+corrs = cor(all_div_mns, method = 'pearson', use = 'pairwise.complete.obs')[1,-1]
 
-spectral_div_names = spectral_div %>%
-  select(-PrimaryKey) %>%
+spectral_div_names = all_div_mns %>%
+  select(-SpeciesN) %>%
   colnames()
 
 corrs_df <- as_tibble(cbind(spectral_div_names, as.numeric(corrs)))
 
+options(scipen=999)
+
 ggplot()+
   geom_point(corrs_df, mapping = aes(x = spectral_div_names, y = corrs)) +
-  scale_y_continuous(breaks =  seq(-.2, .3, by = .1), limits = c(-.2,.3)) +
+  scale_y_continuous(breaks =  seq(-.4, .4, by = .1), limits = c(-.4,.4)) +
   labs(x = 'Spectral diversity measure', y = "Pearson correlations") +
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 90))
@@ -246,9 +258,34 @@ ggplot()+
 ```{r}
 # Plot NDVI 40 bins shannons H
 ggplot() +
-  geom_point(all_div, mapping = aes(x = SpecRich, y = NDVI_40ShanH), color = 'blue', fill = 'dodgerblue', alpha = .2, shape = 16) + 
+  geom_point(all_div, mapping = aes(x = SpeciesN, y = NDVI_40ShanH), color = 'blue', fill = 'dodgerblue', alpha = .1, shape = 16) + 
   labs(x = 'Species Richness', y = 'Shannons H with 40 bins for NDVI') +
+  theme_minimal()
+
+# Plot NDVI means
+ggplot() +
+  geom_point(all_div_mns, mapping = aes(x = SpeciesN, y = NDVI_mn), color = 'blue', fill = 'dodgerblue', alpha = .1, shape = 16) + 
+  labs(x = 'Species Richness', y = 'NDVI means') +
   theme_minimal()
 ```
 
+### Toy spectral diversity random forest model
+```{r}
+# Run tuning function
+rf_spectral_div_tune <-tuneRF(y=all_div$SpeciesN, x = all_div[,2:ncol(all_div)], stepFactor=2, ntreeTry=300)
+rf_spectral_all_tune <-tuneRF(y=all_div_mns$SpeciesN, x = all_div_mns[,2:ncol(all_div_mns)], stepFactor=2, ntreeTry=300)
+
+# Run random forest model based on tuning function above
+rf_spectral_div = randomForest(SpeciesN ~ ., data = all_div, importance = TRUE, ntree = 500, mtry = 25)
+rf_spectral_all = randomForest(SpeciesN ~ ., data = all_div_mns, importance = TRUE, ntree = 500, mtry = 15)
+
+varImpPlot(rf_spectral_div)
+varImpPlot(rf_spectral_all)
+
+# Use the strongest model going forward
+rf_spectral_div
+rf_spectral_all
+plot(rf_spectral_div)
+plot(rf_spectral_all)
+```
 
