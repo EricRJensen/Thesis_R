@@ -1,0 +1,210 @@
+---
+title: "WitholdMergeAIM"
+author: "Eric Jensen"
+date: "September 23, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(sf)
+library(mapview)
+library(lubridate)
+library(nngeo) # nearest neighbors and other dependencies
+library(stringr)
+```
+
+#Loading, Merging, and Withholding datapoints for upload to GEE
+### Summary
+In these scripts I will be merging my field collected data from 2019 with the AIM dataset for years 2011-2017 to streamline analysis. Once I have completed the merging, I will withhold datapoints for an independent validation set based on two criteria, 1) all datapoints that were revisited one or more times within the AIM dataset and 2) for any points that are within 100 meters of another point, I will keep the most recent of those points.
+
+#### Import and clip spatial data to project boundary
+
+```{r}
+# -------- Import Great Basin AIM plots and AIM species and join ------------
+# AIM plots
+AIMplots <- st_read('data/AIM_LMF_Shapefiles/AIM_2_0/GB_AIM.shp',quiet = TRUE, stringsAsFactors = FALSE) %>%
+  st_transform(crs = 4326) %>%
+  select(c(PlotID,VisitDate = DateVisite, PrimaryKey, Latitude, Longitude)) %>%
+  mutate(Program = 'AIM') 
+
+#AIM species
+AIMspec <- read_csv('data/AIM_LMF_CSVs/AIM_2_0/AIM_SpeciesRichness.csv') %>%
+  select(c(PrimaryKey,SpeciesN = SpeciesCou)) %>%
+  unique()
+
+# Join
+AIMplots <- left_join(AIMplots, AIMspec, by = 'PrimaryKey') %>% unique()
+remove(AIMspec)
+
+# -------- Import Great Basin LMF plots and LMF species and join ------------
+# LMF plots
+LMFplots <- st_read('data/AIM_LMF_Shapefiles/AIM_2_0/GB_LMF.shp',quiet = TRUE, stringsAsFactors = FALSE)%>%
+  st_transform(crs = 4326) %>%
+  select(c(PlotID = PLOTKEY, VisitDate = DateVisite, PrimaryKey, Latitude = Latitude_N, Longitude = Longitude_)) %>%
+  mutate(Program = 'LMF')
+
+#LMF species
+LMFspec <- read_csv('data/AIM_LMF_CSVs/AIM_2_0/LMF_PlantCensus.csv') %>%
+  select(c(PrimaryKey, CPLANT)) %>%
+  group_by(PrimaryKey) %>%
+  dplyr::mutate(SpeciesN = n()) %>%
+  select(-CPLANT) %>%
+  unique()
+
+# Join
+LMFplots <- left_join(LMFplots, LMFspec, by = 'PrimaryKey') %>% unique()
+remove(LMFspec)
+
+# -------- Import 2019 Jensen-Godkin plots and species and join ------------
+# LMF plots
+options(scipen=999)
+Fieldplots <- st_read('data/AIM_LMF_Shapefiles/AIM_1_0/FieldPlots_tbl.shp',quiet = TRUE, stringsAsFactors = FALSE) %>%
+  st_transform(crs = 4326) %>%
+  dplyr::rename(PrimaryKey = PlotKey) %>%
+  select(c(PlotID, VisitDate = EstablishD, PrimaryKey, Latitude, Longitude)) %>%
+  mutate(Longitude = - Longitude) %>%
+  mutate(Program = 'Jensen')
+
+# Calculate number of species form list
+Fieldspec <- read_csv('data/AIM_LMF_CSVs/Jensen2019/tblPlotSpecies.csv') %>%
+  select(c(PlotKey, Species)) %>%
+  dplyr::mutate(PrimaryKey = as.character(PlotKey)) %>%
+  group_by(PrimaryKey) %>%
+  dplyr::mutate(SpeciesN = n()) %>%
+  select(-c(Species, PlotKey)) %>%
+  unique()
+
+# Join
+Fieldplots <- left_join(Fieldplots, Fieldspec, by = 'PrimaryKey')
+remove(Fieldspec)
+```
+
+Bind the columns together into a single dataframe
+```{r}
+Allplots <- rbind(AIMplots,Fieldplots, LMFplots)
+
+remove(AIMplots, LMFplots, Fieldplots)
+```
+ 
+#### Assess proximity of points to each other
+```{r}
+# find the second shortest euclidean distance between each point (reported back in meters)
+plots_nn <- st_nn(Allplots, Allplots, sparse=TRUE, k=2,returnDist=T)
+
+# Mutate new column with nearest neighbor distance
+Allplots <- Allplots %>%
+  mutate(nn_dist = plots_nn$dist[,2]) 
+
+# Two loops for the price of one to get the nearest neighbor plot id
+for(i in 1:nrow(Allplots)){
+  nn <- plots_nn$nn[[i]][2]
+  Allplots$nn_index[i] <- nn
+}
+for(i in 1:nrow(Allplots)){
+  index <- Allplots$nn_index[i]
+  Allplots$nn_name[i] <- Allplots$PlotID[index]
+}
+
+remove(i,index,nn,plots_nn)
+```
+
+**Filter all points that overlap with another point exactly or have the same PlotID as another to a new object called "AIM_validate"**
+```{r}
+# There are a lot of issues with the plots listed in the same locations (major discrepancies in species counts. etc)--throw them out
+Allplots <- Allplots %>%
+  filter(nn_dist > 0)
+
+# Some plots have the same PlotID but different locations, so I want to grab those too.
+# Find plots with the same name as another plot and create a column with the n() of each plot name. 
+# Then filter all plots with an n()>1 AND within 100 meters of another plot
+Allvalidate <- Allplots %>%
+  dplyr::mutate(nameCount=n()) %>%
+  filter(nameCount>1 & nn_dist <=100) %>%
+  select(-nn_dist, -nn_index, nn_name, -nameCount)
+
+# Filter out all of the independent validation plots from the AIM_dist dataframe and nearest neighbor and count columns
+Allmodel <- Allplots %>%
+  dplyr::mutate(nameCount=n()) %>% 
+  filter(nameCount <= 1 | nn_dist >100) %>% 
+  select(-nn_dist, -nn_index, nn_name, -nameCount)
+```
+
+#### Set aside 30 percent of the plots total for independent validation
+```{r}
+# We want to set aside some percentage of the data for the validation set. So we need to check that.
+set.seed(10)
+pct_withhold = .3
+n_validate = nrow(Allvalidate)
+plots_needed = round((pct_withhold * nrow(Allplots)) - n_validate)
+
+Allvalidate_more = Allmodel %>%
+  sample_n(size = plots_needed, replace = FALSE)
+  
+# Rbind AIM_validate_more to AIM_validate
+Allvalidate <- rbind(Allvalidate, Allvalidate_more)%>%
+  select(-c(nn_name, Latitude, Longitude)) %>%
+  mutate(VisitYear = lubridate::year(VisitDate))
+
+# Drop rows of AIM_model that match AIM_validate_more
+Allmodel <- Allplots %>%
+  mutate(drop = Allplots$PrimaryKey %in% Allvalidate$PrimaryKey) %>%
+  filter(drop == FALSE) %>%
+  select(-c(nn_dist, nn_index, nn_name, drop, Latitude, Longitude)) %>%
+  mutate(VisitYear = lubridate::year(VisitDate))
+
+remove(Allvalidate_more,n_validate,pct_withhold,plots_needed)
+```
+
+#### Prepare data fields for export to shapefile for GEE
+```{r}
+# Test the proportion of the validation set to the original dataframe
+print(nrow(Allvalidate) / nrow(Allplots))
+print(nrow(Allmodel) / nrow(Allplots))
+remove(Allplots)
+```
+
+#### Export Allmodel and Allvalidate as shapefiles
+```{r}
+# Export AIM_model point data
+st_write(Allmodel, dsn = 'data/AIM_PlotOutput/AIM_model2_2.shp', driver = 'ESRI Shapefile', delete_dsn = TRUE)
+write_csv(Allmodel,'data/SpectralDiversity_CSVs/Allmodel.csv')
+
+# Export AIM_validate point data
+st_write(Allvalidate, dsn = 'data/AIM_PlotOutput/AIM_validate2_2.shp', driver = 'ESRI Shapefile', delete_dsn = TRUE)
+write_csv(Allvalidate,'data/SpectralDiversity_CSVs/Allvalidate.csv')
+```
+
+#### Review outputs without running entire script
+```{r}
+AIM_model_buff_import <- st_read('data/AIM_modelbuff_100m.shp')
+View(AIM_model_buff_import)
+
+# Search for missing values in visit date
+AIM_model_buff_import %>%
+  summarise(n = n_distinct(VisitYear))
+
+AIM_model_buff_import %>%
+  as_tibble() %>%
+  mutate(geometry = NULL) %>%
+  select(VisitYear) %>%
+  distinct(VisitYear)
+
+AIM_model_buff_import %>%
+  mutate(VisitVal = is.na(AIM_model_buff_import$VisitDate)) %>%
+  filter(VisitVal == TRUE) %>%
+  View()
+
+### One plot should be removed because missing year—Do this later though
+
+# Search for missing data in species list
+AIM_model_buff_import %>%
+  mutate(SpeciesVal = is.na(AIM_model_buff_import$SpeciesLis)) %>%
+  filter(SpeciesVal == TRUE) %>%
+  View()
+
+# 16 plots without species level data
+```
+
+

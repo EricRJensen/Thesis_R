@@ -1,0 +1,382 @@
+---
+title: "RandomForest 2.0"
+author: "Eric Jensen"
+date: "October 28, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(randomForest)
+library(rfUtilities)
+library(corrplot)
+library(ggthemes)
+library(egg)
+library(ggpubr)
+library(spatstat)
+```
+
+### Import zonal statistics CSVs and process to prepare for join
+```{r}
+BioPhys_mean = read_csv('data/GEEZonal_CSVs/Biophysical_Predictors_Mean.csv') %>% drop_na()
+BioPhys_mode = read_csv('data/GEEZonal_CSVs/Biophysical_Predictors_Mode.csv') %>% drop_na()
+Climate_ann = read_csv('data/GEEZonal_CSVs/Climate_covariates.csv') %>% drop_na()
+Climate_mean = read_csv('data/GEEZonal_CSVs/Climate_Predictors_Mean.csv') %>% drop_na()
+Soil = read_csv('data/GEEZonal_CSVs/Soil_Predictors.csv') %>% drop_na()
+Fire = read_csv('data/GEEZonal_CSVs/Fire_Predictors.csv')
+RemSens = read_csv('data/GEEZonal_CSVs/RS_Predictors.csv') %>% drop_na()
+RemSens_clust = read_csv('data/GEEZonal_CSVs/RS_clust_predictors.csv') %>% drop_na()
+```
+
+Remove NAs from remote sensing data
+```{r}
+RemSens_clean <- RemSens %>%
+  dplyr::select(-c(.geo, VisitYear)) %>%
+  dplyr::select(-1) %>%
+  drop_na() %>%
+  mutate(B1_cv = B1_sd/B1_mn) %>% #Mutate coefficent of variation columns
+  mutate(B2_cv = B2_sd/B2_mn) %>%
+  mutate(B3_cv = B3_sd/B3_mn) %>%
+  mutate(B4_cv = B4_sd/B4_mn) %>%
+  mutate(B5_cv = B5_sd/B5_mn) %>%
+  mutate(B7_cv = B7_sd/B7_mn) %>%
+  mutate(MSAVI2_cv = MSAVI2_sd/MSAVI2_mn) %>%
+  mutate(SAVI_cv = SAVI_sd/SAVI_mn) %>%
+  mutate(SATVI_cv = SATVI_sd/SATVI_mn) %>%
+  mutate(NBR_cv = NBR_sd/NBR_mn) %>%
+  mutate(NDMI_cv = NDMI_sd/NDMI_mn) %>%
+  mutate(NDVI_cv = NDVI_sd/NDVI_mn) %>%
+  mutate(TCA_cv = TCA_sd/TCA_mn) %>%
+  mutate(TCG_cv = TCG_sd/TCB_mn) %>%
+  mutate(TCW_cv = TCW_sd/TCW_mn) %>%
+  mutate(TCB_cv = TCB_sd/TCB_mn) 
+```
+
+Calculate proportion of distinct classes to number of cells in unsupervised classification data
+```{r}
+RemSens_clust = RemSens_clust %>%
+  mutate(k25_prop = kmeans25_distcount/kmeans25_count) %>%
+  mutate(k50_prop = kmeans50_distcount/kmeans50_count) %>%
+  mutate(k100_prop = kmeans100_distcount/kmeans100_count) %>%
+  mutate(k200_prop = kmeans200_distcount/kmeans200_count) %>%
+  select(-c('kmeans25_count','kmeans50_count','kmeans100_count','kmeans200_count','CountNorm', contains('histogram'))) %>%
+  filter(k25_prop != 'inf')
+```
+
+Clean the imported predictor CSVs
+```{r}
+BioPhys_mean_clean = BioPhys_mean %>%
+  dplyr::select(-c(PlotID, Program, VisitYear, .geo, SpeciesN, VisitDate)) %>%
+  dplyr::select(-1) 
+
+clean_df <- function(df){
+  df %>%
+  dplyr::select(-c(PlotID, Program, .geo, SpeciesN, VisitDate, VisitYear,1))}
+
+BioPhys_mode_clean <- clean_df(BioPhys_mode) %>% mutate(landform = mode) %>% dplyr::select(-mode)
+Climate_ann_clean <- clean_df(Climate_ann)
+Climate_mean_clean <- clean_df(Climate_mean)
+Soil_clean <- clean_df(Soil)
+RemSens_clust_clean <- clean_df(RemSens_clust) %>% dplyr::select(-c(contains('_count'), contains('prop')))
+Fire_clean <- clean_df(Fire) %>% dplyr::select(-c(YearsOfMTBS,LastFire))%>%replace(., is.na(.), 0)
+
+remove(BioPhys_mean,BioPhys_mode,Climate_ann,Climate_mean,Soil,Fire,RemSens,RemSens_clust, clean_df)
+```
+
+Join the dataframes together in multiple ways
+ALL PREDICTORS
+```{r}
+Predictors_all <- BioPhys_mean_clean %>%
+  left_join(BioPhys_mode_clean, by = 'PrimaryKey') %>%
+  left_join(RemSens_clean, by = 'PrimaryKey') %>%
+  left_join(RemSens_clust_clean, by = 'PrimaryKey') %>%
+  left_join(Soil_clean, by = 'PrimaryKey') %>%
+  left_join(Fire_clean, by = 'PrimaryKey') %>%
+  left_join(Climate_ann_clean, by = 'PrimaryKey') %>%
+  left_join(Climate_mean_clean, by = 'PrimaryKey') %>%
+  drop_na() %>%
+  setNames(paste0('p.', names(.))) %>% #add p prefix to denote predictors
+  dplyr::rename(PrimaryKey = p.PrimaryKey) # revert names of non-predictors
+
+#not sure where the 70 nas are coming from
+
+#remove(Fire_clean,Soil_clean,RemSens_clean,RemSens_clust_clean,BioPhys_mean_clean,BioPhys_mode_clean,Climate_mean_clean,Climate_ann_clean)
+```
+
+REMOVING PREDICTORS FOR INDIVIDUAL BANDS
+```{r}
+Predictors_noBands <- BioPhys_mean_clean %>%
+  left_join(BioPhys_mode_clean, by = 'PrimaryKey') %>%
+  left_join(RemSens_clean%>%select(-starts_with('B')), by = 'PrimaryKey') %>% #remove columns that start with 'B'
+  left_join(RemSens_clust_clean, by = 'PrimaryKey') %>%
+  left_join(Soil_clean, by = 'PrimaryKey') %>%
+  left_join(Fire_clean, by = 'PrimaryKey') %>%
+  left_join(Climate_ann_clean, by = 'PrimaryKey') %>%
+  left_join(Climate_mean_clean, by = 'PrimaryKey') %>%
+  drop_na() %>%
+  setNames(paste0('p.', names(.))) %>% #add p prefix to denote predictors
+  dplyr::rename('PrimaryKey' = 'p.PrimaryKey') # revert names of non-predictors
+  
+  #not sure where the 70 nas are coming from
+
+remove(Fire_clean,Soil_clean,RemSens_clean,RemSens_clust_clean,BioPhys_mean_clean,BioPhys_mode_clean,Climate_mean_clean,Climate_ann_clean)
+```
+
+# Import spatial plots and join with GEE zonal stats--largely unnecessary
+```{r}
+# library(sf)
+# # Import plots sf for joining GEE zonal stats too
+# AIM_plots <- read_sf('data/Shapefiles/AIM_model.shp') %>%
+#   st_transform(crs = 4326)
+# # Convert to tibble without geometry for manipulating and joining
+# AIMdf <- as_data_frame(matrix(unlist(AIM_plots), nrow=nrow(AIM_plots), byrow=F))
+# AIM_plotsDF <- AIMdf %>%
+#   dplyr::select(-V3, -V7, -V8) %>%
+#   dplyr::rename( "plotkey" = V1, "PlotID" = V2, "VisitYear" = V4, 
+#                  "PrimaryKey" = V5, "SpeciesLis" = V6)
+# 
+# listofGEE = list(AIM_plotsDF,ndvi_mean,ndvi_std,nbr_mean,nbr_std,tcb_mean,tcb_std,tcg_mean,tcg_std,tcw_mean,tcw_std)
+# # Join the zonal statistics to each plot, remove plots with NAs--likely only the dateless plot
+# AIM_wGEE <- reduce(listofGEE, left_join)
+```
+
+### Import Species Diversity data
+```{r}
+Responses = read_csv('data/SpectralDiversity_CSVs/Allmodel.csv') %>% select(c(PrimaryKey,SpeciesN))
+```
+
+Join the predictors and responses together
+```{r}
+BuildModelTable = function(preds){
+  table <- preds %>%
+            full_join(Responses, 'PrimaryKey') %>%
+            drop_na() 
+  return(table)}
+
+# All responses
+ModelTable_all = BuildModelTable(Predictors_all)
+# All predictors except individual bands
+ModelTable_noBands = BuildModelTable(Predictors_noBands)
+
+remove(Predictors_all,Predictors_noBands)
+```
+
+################## Random Forest Modeling ######################
+### Prepare Data for Model Selection
+```{r}
+## Subset dataframe into predictors and responses
+subset_preds = function(ModelTable){
+       predictors = ModelTable %>%
+                       dplyr::select(starts_with('p.')) %>%
+                       mutate(p.landform_v = factor(ModelTable$p.landform)) %>%
+                       dplyr::select(-p.landform)
+       return(predictors)}
+
+Preds_All = subset_preds(ModelTable_all)
+Preds_NoBands = subset_preds(ModelTable_noBands)
+
+subset_resp = function(ModelTable){
+       responses = ModelTable %>%
+                       dplyr::select(starts_with('Species'))
+       return(responses)}
+
+Resps_All = subset_resp(ModelTable_all)
+remove(ModelTable_all,ModelTable_noBands,Responses)
+```
+
+```{r}
+################################################################################
+########################### Skipping this for now ##############################
+
+# # Get mean correlation across all responses
+# # Convert df to absolute values
+# Corr_df_abs <- abs(Cor_df[2:20])
+# predNames <- data.frame(Cor_df[1])
+# predCor <- data.frame(rowMeans(Corr_df_abs))
+# predRank <- cbind(predNames,predCor)
+# View(predRank)
+# 
+# # Get mean correlation across all predictors
+# colMeans(Corr_df_abs)
+```
+
+Random forest variable selection
+```{r}
+################################################################################
+########################### Skipping this for now ##############################
+
+RFsel_All_SR = rf.modelSel(xdata = Preds_All, ydata = Resps_All$SpeciesN, r = c(0.1, 0.2, 0.5, 0.7, 0.9)) 
+RFsel_NoBands_SR = rf.modelSel(xdata = Preds_NoBands, ydata = Resps_All$SpeciesN, r = c(0.1, 0.2, 0.5, 0.7, 0.9)) 
+
+#Assess outputs from species richness model
+plot(RFsel_All_SR)
+plot(RFsel_NoBands_SR)
+```
+
+```{r}
+################################################################################
+########################### Skipping this for now ##############################
+
+# Function to process the rf.modelSel() objects
+Process_ModelSel = function(rfsel){
+    rfsel <- cbind(rownames(rfsel$sel.importance), rfsel$sel.importance)
+    rownames(rfsel) <- NULL
+    colnames(rfsel) <- c("name", "imp")
+    return(rfsel)}
+
+RFsel_ALL_SR_ready = Process_ModelSel(RFsel_All_SR)
+RFsel_NoBands_SR_ready = Process_ModelSel(RFsel_NoBands_SR)
+
+###########################################################
+######## Convert these to more succinct functions #########
+
+# Order the dataframe by variable importance
+RFsel_ALL_SR_ready <- RFsel_ALL_SR_ready[order(-RFsel_ALL_SR_ready$imp),]
+RFsel_NoBands_SR_ready <- RFsel_NoBands_SR_ready[order(-RFsel_NoBands_SR_ready$imp),]
+
+# Get list of names of top 30 predictors for each model
+RFsel_ALL_SR_names <- RFsel_ALL_SR_ready$name[1:nrow(RFsel_ALL_SR_ready)]
+RFsel_NoBands_SR_names <- RFsel_NoBands_SR_ready$name[1:nrow(RFsel_NoBands_SR_ready)]
+
+# drop columns that are not as important based on rfmodelsel--columns not in list of names
+RFsel_ALL_SR_cov <- Preds_All[,as.character(RFsel_ALL_SR_names)] #[-c(4,5,6,9,8,7)]]
+RFsel_NoBands_SR_cov <- Preds_NoBands[,as.character(RFsel_NoBands_SR_names)]
+
+#Too many GD object--get rid of some
+remove(RFsel_ALL_SR_ready,RFsel_NoBands_SR_ready,Predictors_all,Predictors_noBands,BuildModelTable,Process_ModelSel,subset_preds,subset_resp)
+```
+
+Assess correlation between model predictors
+```{r}
+################################################################################
+########################### Skipping this for now ##############################
+
+################################################################################
+########### Figure out better way to eliminate correlated variables ############
+
+# calculate correlation coefficient matrix
+# Figure out how to include landform
+cor_All <-cor(RFsel_ALL_SR_cov%>%select(-p.landform_v), method="pearson")
+cor_NoBands <-cor(RFsel_NoBands_SR_cov, method="pearson")
+
+# plot the correlation. the darker the number, the more correlated the two
+# variables
+corrplot(cor_All,method="number")
+corrplot(cor_NoBands,method="number")
+
+## You can now manually remove any variables that are above your correlation 
+## threshold. In this case we will just leave them all in, but we could remove
+## them by using the following code
+
+###### Model fitting
+ALL_SR_model <- cbind(RFsel_ALL_SR_cov, specN= Resps_All$SpeciesN)
+NoBands_SR_model <- cbind(RFsel_NoBands_SR_cov, specN= Resps_All$SpeciesN)
+
+# Now let's restrict our final predictors to those that are most important (Change manually) 
+# and run the continuous model
+```
+
+Run random forest models
+```{r}
+### Generate random number to set seed
+# sample(1:1000000,1)
+rf_seed = 517953
+set.seed(rf_seed)
+
+# Prepare dataframe for modeling
+All_SR_model <- cbind(specN= Resps_All$SpeciesN, Preds_All)
+NoBands_SR_model <- cbind(specN= Resps_All$SpeciesN, Preds_NoBands)
+
+# Run tuning function
+rf_all_tune <-tuneRF(y=Resps_All$SpeciesN, x = Preds_All, ntreeTry=300)
+rf_nobands_tune <-tuneRF(y=Resps_All$SpeciesN, x = Preds_NoBands, ntreeTry=300)
+print(rf_all_tune)
+
+# Get the mtry value that minimizes error
+mtry_all_opt <- rf_all_tune[, 'mtry'][which.min(rf_all_tune[,'OOBError'])]
+mtry_nobands_opt <- rf_nobands_tune[, 'mtry'][which.min(rf_nobands_tune[,'OOBError'])]
+
+# Apply the model using the optimal mtry tuning parameter
+ALL_rf_model = randomForest(specN ~ ., data=All_SR_model, importance = TRUE, ntree = 200, mtry = mtry_all_opt)
+NoBands_rf_model = randomForest(specN ~ ., data=NoBands_SR_model, importance = TRUE, ntree = 200, mtry = mtry_nobands_opt)
+
+varImpPlot(ALL_rf_model)
+varImpPlot(NoBands_rf_model)
+
+# Use the strongest model going forward
+NoBands_rf_model
+ALL_rf_model
+plot(NoBands_rf_model)
+```
+
+**Tuning a Random Forest via tree depth**  
+From the Data Camp *Machine learning with decision trees* course
+```{r}
+# Establish a list of possible values for mtry, nodesize and sampsize
+mtry <- seq(4, ncol(NoBands_SR_model) * 0.8, 12)
+nodesize <- seq(3, 8, 2)
+sampsize <- nrow(NoBands_SR_model) * c(0.7, 0.8)
+
+# Create a data frame containing all combinations 
+hyper_grid <- expand.grid(mtry = mtry, nodesize = nodesize, sampsize = sampsize)
+
+# Create an empty vector to store OOB error values
+rsq_err <- c()
+
+# Write a loop over the rows of hyper_grid to train the grid of models
+for (i in 1:nrow(hyper_grid)) {
+    print(i)
+    # Train a Random Forest model
+    model <- randomForest(formula = specN ~ ., 
+                          data = NoBands_SR_model,
+                          mtry = hyper_grid$mtry[i],
+                          nodesize = hyper_grid$nodesize[i],
+                          sampsize = hyper_grid$sampsize[i],
+                          ntree = 200)
+                          
+    # Store OOB error for the model  
+    rsq_err[i] <- model$rsq[length(model$rsq)]
+    print(rsq_err[i])
+}
+
+# Identify optimal set of hyperparmeters based on OOB error
+opt_i <- which.max(rsq_err)
+print(hyper_grid[opt_i,])
+```
+
+
+Plot the predicted data vs. the observed data
+```{r}
+# Round for later plotting
+NoBands_rf_modelEx <- round(NoBands_rf_model$rsq[3000], digits = 4)
+
+NoBands_predicted <- NoBands_rf_model$predicted
+
+# plot observed values on the x-axis and predicted values on the y-axis. we are
+# looking for these to be correlated (so close to a 1:1 line)
+# Plot as Alpha ggplot
+NoBands_assess <- bind_cols(predict = NoBands_predicted, response = Resps_All$SpeciesN)
+
+varNoBands <- text_grob(paste("Variance explained =", as.character(NoBands_rf_modelEx[1:4]), sep = "\n"), x = .2, y = .9)
+
+gg_NoBands <- ggplot(NoBands_assess, aes(x=response, y = predict)) +
+  geom_point(alpha=.1, color = 'blue',  shape = 16) +
+  geom_smooth(method='lm',formula=y~x, color = 'red') +
+  labs(x = "Observed diversity", y = "Predicted diversity",title="28 variables, 1000 trees") +
+  annotation_custom(varNoBands) +
+  theme_few()
+gg_NoBands
+
+# calculate r-squared and RMSE
+actual = NoBands_assess$response
+predicted = NoBands_assess$predict
+R2 <- 1 - (sum((actual-predicted)^2)/sum((actual-mean(actual))^2))
+library(caret)
+rmse <- RMSE(NoBands_assess$predict,NoBands_assess$response)
+
+# model_comp <- egg::ggarrange(gg1000var,gg3000var,gg5000var, nrow = 1)
+# annotate_figure(model_comp, top = text_grob("Comparing models with 6 and 14 variables", face = 'bold', size = 18))
+```
+
