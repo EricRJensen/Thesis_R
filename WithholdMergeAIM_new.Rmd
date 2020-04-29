@@ -154,6 +154,9 @@ Allmodel <- Allplots %>%
   select(-c(nn_dist, nn_index, nn_name, drop, Latitude, Longitude)) %>%
   mutate(VisitYear = lubridate::year(VisitDate))
 
+# Rbind all plots to export
+Allplots <- rbind(Allmodel,Allvalidate)
+
 remove(Allvalidate_more,n_validate,pct_withhold,plots_needed)
 ```
 
@@ -174,6 +177,10 @@ write_csv(Allmodel,'data/SpectralDiversity_CSVs/Allmodel.csv')
 # Export AIM_validate point data
 st_write(Allvalidate, dsn = 'data/AIM_PlotOutput/AIM_validate2_2.shp', driver = 'ESRI Shapefile', delete_dsn = TRUE)
 write_csv(Allvalidate,'data/SpectralDiversity_CSVs/Allvalidate.csv')
+
+# Export AIM_validate point data
+st_write(Allplots, dsn = 'data/AIM_PlotOutput/AIM_all_2.shp', driver = 'ESRI Shapefile', delete_dsn = TRUE)
+write_csv(Allplots,'data/SpectralDiversity_CSVs/Allplots.csv')
 ```
 
 #### Review outputs without running entire script
