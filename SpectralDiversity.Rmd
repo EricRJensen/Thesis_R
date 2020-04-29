@@ -207,8 +207,8 @@ remove(norm_hists,norm_hists_all,tc_hists,tc_hists_all, unsup_hists,unsup_hists_
 
 **Import species diversity table**
 ```{r}
-species_div <- read_csv('data/SpectralDiversity_CSVs/Allmodel.csv') %>%
-  select(c(PrimaryKey,SpeciesN))
+species_div <- read_csv('data/SpectralDiversity_CSVs/Allplots.csv') %>%
+  dplyr::select(c(PrimaryKey,SpeciesN))
 ```
 
 **Join dataframes for visualization and analysis**
@@ -221,14 +221,17 @@ spectral_div <- join_all(list(tc_div,norm_div,sd_cv_div,unsup_div), by = 'Primar
 all_div <- left_join(species_div, spectral_div, by = 'PrimaryKey') %>%
                 drop_na()
 
+# Export spectral diversity data for ecological random forest model
+write_csv(all_div, 'data/GEEZonal_CSVs/Spectral_Div_Predictors.csv')
+
 # Join spectral means to the spectral diversity data
 spectral_mns <- read_csv('data/SpectralDiversity_CSVs/RS_Predictors.csv') %>% 
   drop_na() %>% 
-  select(c(PrimaryKey, contains('_mn')))
-all_div_mns <- left_join(all_div, spectral_mns, by = 'PrimaryKey') %>% select(-PrimaryKey)
+  dplyr::select(c(PrimaryKey, contains('_mn')))
+all_div_mns <- left_join(all_div, spectral_mns, by = 'PrimaryKey') %>% dplyr::select(-PrimaryKey)
 
 # Remove PrimaryKey column from all_div
-all_div <- all_div %>% select(-PrimaryKey)
+all_div <- all_div %>% dplyr::select(-PrimaryKey)
 
 remove(sd_cv_div,norm_div,tc_div,unsup_div, spectral_mns)
 ```
@@ -239,7 +242,7 @@ remove(sd_cv_div,norm_div,tc_div,unsup_div, spectral_mns)
 corrs = cor(all_div_mns, method = 'pearson', use = 'pairwise.complete.obs')[1,-1]
 
 spectral_div_names = all_div_mns %>%
-  select(-SpeciesN) %>%
+  dplyr::select(-SpeciesN) %>%
   colnames()
 
 corrs_df <- as_tibble(cbind(spectral_div_names, as.numeric(corrs)))
