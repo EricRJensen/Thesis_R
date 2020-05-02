@@ -31,68 +31,60 @@ mtbs_counts <- st_read('C:/Users/erjensen/Documents/Thesis/ThesisGIS/MTBSpolys/M
   st_transform(crs = 4326) 
 
 # Import Great Basin boundary for plotting and subsetting
-gb_bounds <- st_read('C:/Users/erjensen/Documents/Thesis/ThesisGIS/GB_ProjectBoundary/JensenE_ProjectBoundary.shp') %>%
+gb_bounds <- st_read('C:/Users/erjensen/Documents/Thesis/ThesisGIS/LIIIGBBoundary/LIIIGBBoundary.shp') %>%
   st_transform(crs = 4326)
 
 # Spatially subset data to the Great Basin
-gb_mtbs <- mtbs[gb_bounds,]
+gb_mtbs <- mtbs[gb_bounds,] %>%
+  dplyr::mutate(SizeClass=cut(Acres, breaks=c(-Inf, 5000, 50000, 150000, Inf), labels=c("Small","Medium","Large","Very large")))
 ```
 
 Animate a map
 ```{r}
 options(scipen=999)
 # Get ggmap basemap
-myMap <- get_stamenmap(bbox = c(left = -122.0017,
-                                    bottom = 35.5,
-                                    right = -110.9878,
-                                    top = 46.00167),
-          maptype = "terrain-background", 
+myMap <- get_googlemap(c(x = -115.5, y = 41),
+          maptype = "hybrid", 
           crop = FALSE,
-          zoom = 6)
+          zoom = 6,
+          size = c(1000, 1000))
 ggmap(myMap)
 
 # Create static map of fire counts for finishing gif
 ggmap(myMap)+
-  geom_sf(mtbs_counts, mapping = aes(fill = COUNT_), color = NA, inherit.aes = FALSE) +
-  scale_fill_gradient(low = 'yellow', high = "red") +
-  geom_sf(gb_bounds, mapping = aes(), color = 'darkgreen', fill = NA, inherit.aes = FALSE, cex = 1) +
-  labs(title = "Great Basin Fires (1984-2017)", x = "Longitude", y = "Latitude") +
-  xlim(-123,-111) + ylim(36,45) +
-  theme_minimal()
+  geom_sf(gb_bounds, mapping = aes(), color = 'black', fill = NA, inherit.aes = FALSE, cex = 1.5) +
+  geom_sf(mtbs_counts, mapping = aes(fill = COUNT_), alpha = .9, color = NA, inherit.aes = FALSE) +
+  scale_fill_gradient(low = '#EEDB1F', high = "#CA0000") +
+  labs(title = "Times burned (1984—2017)", fill = 'Times\nburned', x = "", y = "") +
+  xlim(-121.5,-110.5) + ylim(36,44) +
+  theme_minimal() +
+  theme(legend.position = c(0.92, 0.2), legend.background = element_rect(fill = alpha('white',.8)))
 
 # Create map to animate by year
 map <- ggmap(myMap)+
-  geom_sf(gb_mtbs, mapping = aes(fill = Acres), color = NA, inherit.aes = FALSE) +
-  scale_fill_gradient(low = 'orange', high = "red") +
-  geom_sf(gb_bounds, mapping = aes(), color = 'darkgreen', fill = NA, inherit.aes = FALSE, cex = 1) +
-  labs(title = "Great Basin Fires (1984-2017)", x = "Longitude", y = "Latitude") +
-  xlim(-123,-111) + ylim(36,45) +
-  theme_minimal()
+  geom_sf(gb_bounds, mapping = aes(), color = 'black', fill = NA, inherit.aes = FALSE, cex = 1.5) +
+  geom_sf(gb_mtbs, mapping = aes(fill = SizeClass), color = NA, inherit.aes = FALSE, alpha = .9) +
+  scale_fill_manual(values=c("#E8E104", "#FFA811", "#FF6B11", "#FF0000")) +
+  labs(title = "Great Basin Fires (1984-2017)", fill = 'Size class', x = "", y = "") +
+  xlim(-121.5,-110.5) + ylim(36,44) +
+  theme_minimal() +
+  theme(legend.position = c(0.88, 0.15), legend.background = element_rect(fill = alpha('white',.8)))
 
 # Apply animation to annual map
-map + transition_time(StartDate) +
-  labs(title = "Great Basin Fires (1984-2017)             Start date: {frame_time}")
+ani_map <- map + transition_time(Year) +
+  labs(title = "Great Basin Fires (1984-2017)             Year: {frame_time}") +
+  shadow_mark(alpha = .4) 
+
+anim <- animate(ani_map)
+
+magick::image_write(anim, path='C:/Users/erjensen/Documents/Thesis/gb_fire_animation.gif')
 
 ```
 
 Animate a histogram
 ```{r}
-# Prep data for plotting number of fires by size
-gb_mtbs_hist <- gb_mtbs %>%
-  mutate(AcreClass=cut(Acres, breaks=seq(0,600000,10000), labels=seq(5000,595000,10000))) %>%
-  mutate(AcreClass = as.numeric(as.character(AcreClass))) %>%
-  group_by(AcreClass, Year) %>%
-  tally() 
-
-#plotting number of fires by size
-ggplot()+ 
-  geom_bar(gb_mtbs_hist, mapping = aes(x = AcreClass, y = n, fill = as.factor(Year)), stat = "identity") +
-  scale_y_sqrt() +
-  theme(axis.text.x = element_text(angle = 90))
-
 # Prep data for plotting yearly acres against year // color by size of fire
 gb_mtbs_yrly <- gb_mtbs %>%
-  dplyr::mutate(SizeClass=cut(Acres, breaks=c(-Inf, 5000, 50000, 150000, Inf), labels=c("Small","Medium","Large","Very large"))) %>%
   dplyr::group_by(Year, SizeClass) %>%
   dplyr::mutate(YrAcres = sum(Acres)) %>%
   dplyr::select(Year, SizeClass, YrAcres) %>%
@@ -100,10 +92,31 @@ gb_mtbs_yrly <- gb_mtbs %>%
   unique()
 
 # Plot bar chart for acres burned by year, colored by fire size
-ggplot()+ 
+ani_bar <- ggplot()+ 
   geom_bar(gb_mtbs_yrly, mapping = aes(x = Year, y = YrAcres, fill = SizeClass), stat = "identity") +
   scale_fill_manual(values=c("#E8E104", "#FFA811", "#FF6B11", "#FF0000")) +
-  labs(title = "Great Basin fire sizes by year (1984-2017)", x = "Year", y = "Acres burned", fill = 'Fire size')  +
-  theme_minimal()
+  scale_x_continuous(breaks=seq(1984, 2018, 2)) +
+  labs(title = "Great Basin fire sizes by year (1984-2017)", x = "", y = "Acres burned", fill = 'Fire size')  +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45)) +
+  transition_time(Year) +
+  shadow_mark(alpha = .4)
+
+anim <- animate(ani_bar)
+
+magick::image_write(anim, path='C:/Users/erjensen/Documents/Thesis/gb_fire_bar_animation.gif')
+
+# # Prep data for plotting number of fires by size
+# gb_mtbs_hist <- gb_mtbs %>%
+#   mutate(AcreClass=cut(Acres, breaks=seq(0,600000,10000), labels=seq(5000,595000,10000))) %>%
+#   mutate(AcreClass = as.numeric(as.character(AcreClass))) %>%
+#   group_by(AcreClass, Year) %>%
+#   tally() 
+# 
+# #plotting number of fires by size
+# ggplot()+ 
+#   geom_bar(gb_mtbs_hist, mapping = aes(x = AcreClass, y = n, fill = as.factor(Year)), stat = "identity") +
+#   scale_y_sqrt() +
+#   theme(axis.text.x = element_text(angle = 90))
 ```
 

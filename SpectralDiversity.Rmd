@@ -6,11 +6,11 @@ output: html_document
 ---
 
 ```{r setup, include=FALSE}
+library(plyr)
 library(tidyverse)
 library(stringr)
 library(vegan)
 library(sf)
-library(plyr)
 library(randomForest)
 ```
 
@@ -27,7 +27,7 @@ library(randomForest)
 norm_hists_all <- read_csv('data/SpectralDiversity_CSVs/NormHists_flat.csv') %>% drop_na()
 # Select for only columns that are histograms
 norm_hists <- norm_hists_all %>%
-  select(contains('Histogram'))
+  dplyr::select(contains('Histogram'))
 ```
 
 **Unsupervised classification histograms**
@@ -36,7 +36,7 @@ norm_hists <- norm_hists_all %>%
 unsup_hists_all <- read_csv('data/SpectralDiversity_CSVs/RS_clust_Predictors.csv') %>% drop_na()
 # Select for only columns that are histograms
 unsup_hists <- unsup_hists_all %>%
-  select(contains('histogram'))
+  dplyr::select(contains('histogram'))
 ```
 
 **Tasseled cap histograms**
@@ -50,7 +50,7 @@ tcw_files <- list.files('data/SpectralDiversity_CSVs/', pattern = 'tcw', full.na
 Import_TC <- function(tc_list){
   tc_df = tibble()
   for(i in tc_list){
-      indv_tc_df <- read_csv(i, na=c("","NA")) %>% select(c('PrimaryKey', contains('Histogram')))
+      indv_tc_df <- read_csv(i, na=c("","NA")) %>% dplyr::select(c('PrimaryKey', contains('Histogram')))
       tc_df <- rbind(tc_df, indv_tc_df) }
   return(tc_df) }
 
@@ -59,7 +59,7 @@ tcb_df <- Import_TC(tcb_files)
 tcg_df <- Import_TC(tcg_files)
 tcw_df <- Import_TC(tcw_files)
 tc_hists_all <- join_all(list(tcb_df, tcg_df, tcw_df), by = 'PrimaryKey', type = 'left') %>% drop_na()
-tc_hists <- tc_hists_all %>% select(-PrimaryKey)
+tc_hists <- tc_hists_all %>% dplyr::select(-PrimaryKey)
 remove(tcb_files,tcg_files,tcw_files,tcg_df,tcb_df,tcw_df,Import_TC)
 ```
 
@@ -87,7 +87,7 @@ sd_cv_div <- sd_cv_all  %>%
   mutate(TCG_cv = TCG_sd/TCB_mn) %>%
   mutate(TCW_cv = TCW_sd/TCW_mn) %>%
   mutate(TCB_cv = TCB_sd/TCB_mn) %>%
-  select(c(PrimaryKey,contains('_sd'), contains('_cv')))
+  dplyr::select(c(PrimaryKey,contains('_sd'), contains('_cv')))
 remove(sd_cv_all)
 ```
 
@@ -169,7 +169,7 @@ Unsup_CalcDiversity <- function(in_hists, in_PK){
                   val <- count_clean[k,1]
                   count_clean$clean[k] = gsub(".*=","",val)
                   }
-                count_list <- unlist(count_clean %>% select(clean))
+                count_list <- unlist(count_clean %>% dplyr::select(clean))
                 count_list <- as.numeric(unname(count_list))
     
                 # Derive richness and shannons from histograms
@@ -196,7 +196,6 @@ norm_div <- Index_CalcDiversity(in_hists = norm_hists, in_PK = norm_hists_all)
 norm_div <- dplyr::rename(norm_div, PrimaryKey = value)
 
 tc_div <- Index_CalcDiversity(in_hists = tc_hists, in_PK = tc_hists_all)
-tc_div <- dplyr::rename(tc_div, PrimaryKey = value)
 
 # Calculate diversity for unsupervised classification dataframes
 unsup_div <- Unsup_CalcDiversity(in_hists = unsup_hists, in_PK = unsup_hists_all)
