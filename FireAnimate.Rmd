@@ -43,7 +43,6 @@ gb_mtbs <- mtbs[gb_bounds,] %>%
 Animate a map
 ```{r}
 options(scipen=999)
-register_google(key = "AIzaSyARJS3tp_2b2Bpi9xcVnaOLssx7Keoi_r8")
 # Get ggmap basemap
 myMap <- get_googlemap(c(x = -115.5, y = 41),
           maptype = "satellite", 
