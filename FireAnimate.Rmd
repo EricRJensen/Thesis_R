@@ -16,6 +16,7 @@ library(USAboundaries) # boundary data
 library(lubridate)
 library(transformr)
 library(ggmap)
+library(patchwork)
 #library(tmap)
 ```
 
@@ -42,20 +43,20 @@ gb_mtbs <- mtbs[gb_bounds,] %>%
 Animate a map
 ```{r}
 options(scipen=999)
+register_google(key = "AIzaSyARJS3tp_2b2Bpi9xcVnaOLssx7Keoi_r8")
 # Get ggmap basemap
 myMap <- get_googlemap(c(x = -115.5, y = 41),
-          maptype = "hybrid", 
+          maptype = "satellite", 
           crop = FALSE,
           zoom = 6,
           size = c(1000, 1000))
-ggmap(myMap)
 
 # Create static map of fire counts for finishing gif
 ggmap(myMap)+
   geom_sf(gb_bounds, mapping = aes(), color = 'black', fill = NA, inherit.aes = FALSE, cex = 1.5) +
   geom_sf(mtbs_counts, mapping = aes(fill = COUNT_), alpha = .9, color = NA, inherit.aes = FALSE) +
   scale_fill_gradient(low = '#EEDB1F', high = "#CA0000") +
-  labs(title = "Times burned (1984—2017)", fill = 'Times\nburned', x = "", y = "") +
+  labs(title = "Times burned (1984-2017)", fill = 'Times\nburned', x = "", y = "") +
   xlim(-121.5,-110.5) + ylim(36,44) +
   theme_minimal() +
   theme(legend.position = c(0.92, 0.2), legend.background = element_rect(fill = alpha('white',.8)))
@@ -92,13 +93,15 @@ gb_mtbs_yrly <- gb_mtbs %>%
   unique()
 
 # Plot bar chart for acres burned by year, colored by fire size
-ani_bar <- ggplot()+ 
+bar <- ggplot()+ 
   geom_bar(gb_mtbs_yrly, mapping = aes(x = Year, y = YrAcres, fill = SizeClass), stat = "identity") +
   scale_fill_manual(values=c("#E8E104", "#FFA811", "#FF6B11", "#FF0000")) +
   scale_x_continuous(breaks=seq(1984, 2018, 2)) +
   labs(title = "Great Basin fire sizes by year (1984-2017)", x = "", y = "Acres burned", fill = 'Fire size')  +
   theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45)) +
+  theme(axis.text.x = element_text(angle = 45)) 
+
+ani_bar <- bar +
   transition_time(Year) +
   shadow_mark(alpha = .4)
 
@@ -118,5 +121,10 @@ magick::image_write(anim, path='C:/Users/erjensen/Documents/Thesis/gb_fire_bar_a
 #   geom_bar(gb_mtbs_hist, mapping = aes(x = AcreClass, y = n, fill = as.factor(Year)), stat = "identity") +
 #   scale_y_sqrt() +
 #   theme(axis.text.x = element_text(angle = 90))
+```
+
+Patchwork of fires gifs
+```{r}
+ani_map | ani_bar
 ```
 

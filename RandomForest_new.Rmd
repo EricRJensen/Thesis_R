@@ -7,15 +7,18 @@ output: html_document
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+options(scipen=999)
 
 library(tidyverse)
+library(sf)
 library(randomForest)
 library(rfUtilities)
 library(corrplot)
 library(ggthemes)
-library(egg)
 library(ggpubr)
 library(spatstat)
+library(caret)
+library(gbm)
 ```
 
 ### Wrangle data for modeling
@@ -34,7 +37,7 @@ Soil = read_csv('data/GEEZonal_CSVs/Soil_Predictors.csv')
 
 # Remote Sensing
 RemSens = read_csv('data/GEEZonal_CSVs/RS_Predictors.csv')
-RemSens_clust = read_csv('data/GEEZonal_CSVs/RS_clust_predictors.csv')
+RemSens_clust = read_csv('data/GEEZonal_CSVs/RS_clust_predictors.csv') %>% drop_na()
 RemSens_specDiv_clean = read_csv('data/GEEZonal_CSVs/Spectral_Div_Predictors.csv') %>% drop_na()
 
 # Cheatgrass
@@ -95,15 +98,17 @@ Predictors_all <- BioPhys_mean_clean %>%
   left_join(Soil_clean, by = 'PrimaryKey') %>%
   left_join(Fire_clean, by = 'PrimaryKey') %>%
   left_join(dnbr_clean, by = 'PrimaryKey') %>%
-  left_join(rdnbr_clean, by = 'PrimaryKey') %>%
   left_join(Climate_ann_clean, by = 'PrimaryKey') %>%
   left_join(Climate_mean_clean, by = 'PrimaryKey') %>%
   left_join(Cheatgrass_clean, by = 'PrimaryKey') %>%
   setNames(paste0('p.', names(.))) %>% #add p prefix to denote predictors
   dplyr::rename(PrimaryKey = p.PrimaryKey) %>%
-  dplyr::select(-c(p.SpeciesN,starts_with('p.B'))) %>% # revert names of non-predictors
-  unique()
+  dplyr::select(-c(p.SpeciesN,starts_with('p.B'))) #%>% # revert names of non-predictors
+  unique() %>%
+  drop_na()
 
+# Left out dnbr because of an issue with the primary key in the dataframe:   left_join(rdnbr_clean, by = 'PrimaryKey') %>%  
+  
 remove(dnbr_clean,rdnbr_clean, Cheatgrass_clean, RemSens_specDiv_clean, Fire_clean, Soil_clean, RemSens_clean, RemSens_clust_clean, BioPhys_mean_clean, BioPhys_mode_clean,Climate_mean_clean,Climate_ann_clean)
 ```
 
@@ -120,20 +125,12 @@ BuildModelTable = function(preds){
 
 # All predictors except individual bands
 ModelTable = BuildModelTable(Predictors_all) %>% 
-  dplyr::select(-c(PrimaryKey)) %>% 
-  mutate(p.landform = as.factor(p.landform)) %>% 
+  mutate(p.landform = as.factor(p.landform)) %>%
   drop_na()
 
-remove(Predictors_all,Predictors_noBands)
+remove(Predictors_all)
 ```
 
-Divide modeling dataframe into training set and test set
-```{r}
-
-```
-
-
-### Random Forest Modeling
 Assess correlations of predictor variables
 ```{r}
 # Exclude non-numeric predictors
@@ -148,10 +145,27 @@ corrplot(ModelTable_cor)
 remove(ModelTable_cor)
 ```
 
+Divide modeling dataframe into training set and test set
+```{r}
+# Create validation set using 25% of data and modeling set with remaining 75% of data
+set.seed(10)
+model_val_wKey <- sample_frac(ModelTable, size = .25, replace = FALSE)
+model_train <- ModelTable %>%
+  mutate(drop = ModelTable$PrimaryKey %in% model_val$PrimaryKey) %>%
+  filter(drop == FALSE) %>%
+  select(-drop)
+
+model_train <- model_train %>% dplyr::select(-PrimaryKey)
+model_val <- model_val %>% dplyr::select(-PrimaryKey)
+remove(ModelTable,Responses,BuildModelTable)
+```
+
+
+### Random Forest Modeling
 Random forest variable selection
 ```{r}
 # Perform Random Forest variable selection
-RFsel_All = rf.modelSel(xdata = ModelTable %>% dplyr::select(starts_with('p.')), ydata = ModelTable$r.SpeciesN, r = c(0.1, 0.2, 0.5, 0.7, 0.9)) 
+RFsel_All = rf.modelSel(xdata = model_train %>% dplyr::select(starts_with('p.')), ydata = model_train$r.SpeciesN, r = c(0.1, 0.2, 0.5, 0.7, 0.9)) 
 
 #Assess outputs from species richness model
 plot(RFsel_All)
@@ -203,13 +217,13 @@ rf_seed = 517953
 set.seed(rf_seed)
 
 # Run tuning function
-rf_all_tune <-tuneRF(y=ModelTable$r.SpeciesN, x = ModelTable %>% dplyr::select(-c(r.SpeciesN)), ntreeTry=300)
+rf_all_tune <-tuneRF(y=model_train$r.SpeciesN, x = model_train %>% dplyr::select(-c(r.SpeciesN)), ntreeTry=300)
 
 # Get the mtry value that minimizes error
 mtry_all_opt <- rf_all_tune[, 'mtry'][which.min(rf_all_tune[,'OOBError'])]
 
 # Apply the model using the optimal mtry tuning parameter
-ALL_rf_model = randomForest(r.SpeciesN ~ ., data = ModelTable, importance = TRUE, ntree = 200, mtry = mtry_all_opt)
+ALL_rf_model = randomForest(r.SpeciesN ~ ., data = model_train, importance = TRUE, ntree = 200, mtry = mtry_all_opt)
 
 varImpPlot(ALL_rf_model)
 
@@ -255,45 +269,129 @@ print(hyper_grid[opt_i,])
 
 Assess random forest model on the independent validation set
 ```{r}
+# Predict on validation set
+rf_preds <- predict(object = ALL_rf_model, newdata = model_val %>% dplyr::select(-c(r.SpeciesN)))
 
+# Bind prediction to actual data
+rf_val_preds <- tibble(Predicted = rf_preds, 
+                       Response = model_val$r.SpeciesN,
+                       PrimaryKey = model_val_wKey$PrimaryKey) %>%
+                  mutate(Error = abs(Predicted - Response)) %>%
+                  mutate(SqError = (Predicted - Response)^2)
+
+# Calculate validation stats
+postResample(rf_val_preds$Prediction, val_preds$Response)
+rf_rmse <- postResample(rf_val_preds$Prediction, rf_val_preds$Response)[[1]] %>% round(4)
+rf_rsq <- postResample(rf_val_preds$Prediction, rf_val_preds$Response)[[2]] %>% round(4)
 ```
 
+### Boosted trees
 Investigate boosted regression tree approach
+Used same proceedure as Machine learning with tree-based models in R course on DataCamp
 ```{r}
+set.seed(rf_seed)
 
+# Build GBM model
+ALL_gbm_model <- gbm(formula = r.SpeciesN ~ .,
+                     distribution = 'poisson',
+                     data = model_train,
+                     n.trees = 1000)
+# Evaluate predictors
+print(ALL_gbm_model)
+summary(ALL_gbm_model)
+
+# Generate predictions on test set // scale to response rather than on log scale (default for Poisson)
+gbm_preds <- predict(object = ALL_gbm_model,
+                     newdata = model_val %>% dplyr::select(-r.SpeciesN),
+                     n.trees = 1000,
+                     type = "response")
+
+range(model_val$r.SpeciesN)
+range(gbm_preds)
+range(rf_preds)
+
+# Tuning // Early stopping --------------------
+# Optimal ntree estimate based on OOB
+ntree_opt_oob <- gbm.perf(object = ALL_gbm_model, 
+                          method = 'OOB', 
+                          oobag.curve = TRUE)
+
+# Train a CV GBM model
+set.seed(rf_seed)
+ALL_gbm_model_cv <- gbm(formula = r.SpeciesN ~ .,
+                     distribution = 'poisson',
+                     data = model_train,
+                     n.trees = 4000,
+                     cv.folds = 5)
+
+# Optimal ntree estimate based on CV
+ntree_opt_cv <- gbm.perf(object = ALL_gbm_model_cv, 
+                         method = 'cv')
+
+# Compare the estimates                         
+print(paste0("Optimal n.trees (OOB Estimate): ", ntree_opt_oob))                         
+print(paste0("Optimal n.trees (CV Estimate): ", ntree_opt_cv))
+
+# Generate predictions on the test set using ntree_opt_cv number of trees
+gbm_preds2 <- predict(object = ALL_gbm_model_cv, 
+                  newdata = model_val,
+                  n.trees = ntree_opt_cv,
+                  type = "response")  
+
+# Bind prediction to actual data
+gbm_val_preds <- as_tibble(cbind(model_val$r.SpeciesN, gbm_preds2)) %>% dplyr::select(c(Response = V1, Prediction = gbm_preds2))
+
+# Calculate validation stats
+postResample(gbm_val_preds$Prediction, gbm_val_preds$Response)
+gbm_rmse <- postResample(gbm_val_preds$Prediction, gbm_val_preds$Response)[[1]] %>% round(4)
+gbm_rsq <- postResample(gbm_val_preds$Prediction, gbm_val_preds$Response)[[2]] %>% round(4)
 ```
 
-
-Plot the predicted data vs. the observed data
+Plot the predicted data vs. the observed data for validation set of RandomForest
 ```{r}
-# Round for later plotting
-All_rf_modelEx <- round(ALL_rf_model$rsq[3000], digits = 4)
+# Plot random forest
+rf_rsq_grob <- text_grob(paste("R-squared =", as.character(rf_rsq)), x = .15, y = .95)
+rf_rmse_grob <- text_grob(paste("RMSE =", as.character(rf_rmse)), x = .13, y = .9)
 
-All_rf_predicted <- ALL_rf_model$predicted
-
-# plot observed values on the x-axis and predicted values on the y-axis. we are
-# looking for these to be correlated (so close to a 1:1 line)
-# Plot as Alpha ggplot
-All_assess <- dplyr::bind_cols(predict = All_rf_predicted, response = ModelTable$r.SpeciesN)
-
-varAll <- text_grob(paste("Variance explained =", as.character(All_rf_modelEx[1:4]), sep = "\n"), x = .2, y = .9)
-
-ggplot(All_assess, aes(x=response, y = predict)) +
-  geom_point(alpha=.1, color = 'blue',  shape = 16) +
+ggplot(rf_val_preds, aes(x=Response, y = Prediction)) +
+  geom_point(alpha=.2, color = 'blue',  shape = 16) +
   geom_smooth(method='lm',formula=y~x, color = 'red') +
-  labs(x = "Observed diversity", y = "Predicted diversity",title="28 variables, 1000 trees") +
-  annotation_custom(varAll) +
+  geom_abline(intercept = 0, slope = 1, cex = 1) +
+  labs(x = "Observed diversity", y = "Predicted diversity", title = "Model predictions against field observations") +
+  annotation_custom(rf_rsq_grob) +
+  annotation_custom(rf_rmse_grob) +
+  scale_x_continuous(limits = c(0,60), breaks = seq(0,60,10)) + 
+  scale_y_continuous(limits = c(0,60), breaks = seq(0,60,10)) +
   theme_few()
-gg_NoBands
 
-# calculate r-squared and RMSE
-actual = NoBands_assess$response
-predicted = NoBands_assess$predict
-R2 <- 1 - (sum((actual-predicted)^2)/sum((actual-mean(actual))^2))
-library(caret)
-rmse <- RMSE(NoBands_assess$predict,NoBands_assess$response)
+# Plot gbm
+gbm_rsq_grob <- text_grob(paste("R-squared =", as.character(gbm_rsq)), x = .15, y = .95)
+gbm_rmse_grob <- text_grob(paste("RMSE =", as.character(gbm_rmse)), x = .13, y = .9)
 
-# model_comp <- egg::ggarrange(gg1000var,gg3000var,gg5000var, nrow = 1)
-# annotate_figure(model_comp, top = text_grob("Comparing models with 6 and 14 variables", face = 'bold', size = 18))
+ggplot(gbm_val_preds, aes(x=Response, y = Prediction)) +
+  geom_point(alpha=.2, color = 'blue',  shape = 16) +
+  geom_smooth(method='lm',formula=y~x, color = 'red') +
+  geom_abline(intercept = 0, slope = 1, cex = 1) +
+  labs(x = "Observed diversity", y = "Predicted diversity", title = "Model predictions against field observations") +
+  annotation_custom(gbm_rsq_grob) +
+  annotation_custom(gbm_rmse_grob) +
+  scale_x_continuous(limits = c(0,60), breaks = seq(0,60,10)) + 
+  scale_y_continuous(limits = c(0,60), breaks = seq(0,60,10)) +
+  theme_few()
+```
+
+Assess errors spatially
+```{r}
+# Import spatial data
+AIM_spatial <- read_sf('data/AIM_PlotOutput/AIM_all_2.shp') %>% 
+  st_transform(crs = 4326)
+
+# Join validation set predictions to spatial data
+rf_val_spatial <- st_as_sf(left_join(rf_val_preds, AIM_spatial, 'PrimaryKey'))
+
+ggplot()+
+  geom_sf(rf_val_spatial, mapping =aes(fill = SqError, color = SqError, cex = SqError))+
+  scale_colour_viridis_c() +
+  scale_fill_viridis_c()
 ```
 

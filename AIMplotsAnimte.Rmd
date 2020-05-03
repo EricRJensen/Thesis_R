@@ -1,0 +1,70 @@
+---
+title: "AIMplotsAnimate"
+author: "Eric Jensen"
+date: "5/1/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(sf)
+library(raster)
+library(gganimate)
+library(mapview)
+library(tidyverse)
+library(animation) #movie making
+library(USAboundaries) # boundary data
+library(lubridate)
+library(transformr)
+library(ggmap)
+library(viridis)
+```
+
+Import shapefiles
+```{r}
+#Import AIM plots
+AIMplots <- read_sf('data/AIM_PlotOutput/AIM_all_2.shp') %>%
+  st_transform(crs = 4326) %>%
+  dplyr::select(-VisitDate)
+
+#Import Jensen plots
+Jensenplots <- read_sf('Viz/JensenPlots.shp') %>%
+  st_transform(crs = 4326)
+
+# Import Great Basin boundary for plotting and subsetting
+gb_bounds <- st_read('C:/Users/erjensen/Documents/Thesis/ThesisGIS/LIIIGBBoundary/LIIIGBBoundary.shp') %>%
+  st_transform(crs = 4326)
+```
+
+Download basemap
+```{r}
+register_google(key = "AIzaSyARJS3tp_2b2Bpi9xcVnaOLssx7Keoi_r8")
+options(scipen=999)
+# Get ggmap basemap
+myMap <- get_googlemap(c(x = -115.5, y = 41),
+          maptype = "hybrid", 
+          crop = FALSE,
+          zoom = 6,
+          size = c(1000, 1000))
+
+map <- ggmap(myMap)+
+  geom_sf(gb_bounds, mapping = aes(), color = 'black', fill = NA, inherit.aes = FALSE, cex = 1.5) +
+  geom_sf(AIMplots, mapping = aes(colour = SpeciesN, fill = SpeciesN), inherit.aes = FALSE) +
+  scale_colour_viridis_c(option = 'magma') +
+  scale_fill_viridis_c(option = 'magma', guide = FALSE) +
+  labs(title = "BLM AIM plots in the Great Basin", x = "", y = "", colour = 'Richness') +
+  xlim(-121.5,-110.5) + ylim(36.5,44) +
+  theme_minimal() +
+  theme(legend.position = c(0.9, 0.19), legend.background = element_rect(fill = alpha('white',.8)))
+
+# Apply animation to annual map
+ani_map <- map + transition_states(VisitYear) +
+  labs(title = "BLM AIM plots in the Great Basin   Year: {frame_time}") 
+
+anim <- animate(ani_map)
+
+magick::image_write(anim, path='C:/Users/erjensen/Documents/Thesis/gb_AIM_animation.gif')
+```
+
+
+
+
